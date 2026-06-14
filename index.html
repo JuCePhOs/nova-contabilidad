@@ -6,23 +6,55 @@
 <title>Contabilidad — NOVA IA Academy</title>
 <link rel="icon" href="data:,">
 
+<script>
+  // Si algo falla al cargar, mostrarlo EN PANTALLA (no solo en consola)
+  window.addEventListener('error', function(e){
+    var root = document.getElementById('root');
+    if(!root) return;
+    var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
+    root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
+      + '⚠ Error al cargar la aplicación\n\n'
+      + msg + '\n\n'
+      + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
+      + '\n\nToma una captura de esto y compártela.</div>';
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    var root = document.getElementById('root');
+    if(!root) return;
+    var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
+    root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
+      + '⚠ Error (promesa) al cargar la aplicación\n\n' + msg
+      + '\n\nToma una captura de esto y compártela.</div>';
+  });
+  function cdnError(name){
+    return "var r=document.getElementById('root'); if(r) r.innerHTML='<div style=\\'padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e\\'>⚠ No se pudo cargar: "+name+"<br><br>Revisa tu conexión a internet. Si el problema persiste, puede que ese CDN esté bloqueado en tu red.</div>';";
+  }
+  // Red de seguridad: si tras 10s sigue en "Cargando" sin error explícito
+  setTimeout(function(){
+    var boot = document.getElementById('boot');
+    if(boot){
+      boot.outerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fbbf24;background:#1a1408;white-space:pre-wrap;line-height:1.6">'
+        + '⚠ La aplicación tardó demasiado en cargar.\n\n'
+        + 'Esto suele indicar que algún recurso externo no respondió.\n'
+        + 'Recarga la página (F5). Si vuelve a quedarse así, toma una captura y compártela.</div>';
+    }
+  }, 10000);
+</script>
+
 <!-- React 18 -->
-<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin onerror="eval(cdnError('react.production.min.js'))"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin onerror="eval(cdnError('react-dom.production.min.js'))"></script>
 
 <!-- Babel standalone — transpila el JSX en el navegador -->
-<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-
-<!-- Recharts (gráficas) -->
-<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin onerror="eval(cdnError('@babel/standalone'))"></script>
 
 <!-- XLSX (exportar Excel) -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin onerror="eval(cdnError('xlsx.full.min.js'))"></script>
 
 <!-- Firebase (sincronización con el CRM) -->
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js" onerror="eval(cdnError('firebase-app-compat.js'))"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js" onerror="eval(cdnError('firebase-database-compat.js'))"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js" onerror="eval(cdnError('firebase-auth-compat.js'))"></script>
 
 <style>
   html,body{margin:0;padding:0;background:#080E1A}
@@ -35,10 +67,6 @@
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useCallback } = React;
-const {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell, Legend,
-} = Recharts;
 
 // ─── FIREBASE ──────────────────────────────────────────────────────────────────
 const firebaseConfig={
@@ -536,6 +564,87 @@ function ModalPagarGasto({ gasto, onSave, onClose }) {
   );
 }
 
+// ─── GRÁFICAS SVG (sin dependencias externas) ────────────────────────────────
+function MiniBarChart({ data, height=200 }){
+  if(!data||!data.length) return <div style={{height,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--tx3)",fontSize:12}}>Sin datos</div>;
+  const W=600,H=height,padL=42,padB=26,padT=10,padR=8;
+  const innerW=W-padL-padR, innerH=H-padT-padB;
+  const maxV=Math.max(1,...data.flatMap(d=>[d.ing||0,d.gst||0]));
+  const niceMax=Math.max(1000,Math.ceil(maxV/1000)*1000);
+  const n=data.length, groupW=innerW/n, barW=Math.min(20,groupW*0.32);
+  const yTo=v=>padT+innerH-(v/niceMax)*innerH;
+  const ticks=[0,0.25,0.5,0.75,1].map(f=>Math.round(niceMax*f));
+  return(
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height,display:"block"}} preserveAspectRatio="xMidYMid meet">
+        {ticks.map((t,i)=>(
+          <g key={i}>
+            <line x1={padL} x2={W-padR} y1={yTo(t)} y2={yTo(t)} stroke="var(--br)" strokeDasharray="3 3"/>
+            <text x={padL-6} y={yTo(t)+3} textAnchor="end" fontSize="10" fill="var(--tx2)">{`$${(t/1000).toFixed(0)}k`}</text>
+          </g>
+        ))}
+        {data.map((d,i)=>{
+          const cx=padL+groupW*i+groupW/2;
+          const hIng=(d.ing||0)/niceMax*innerH, hGst=(d.gst||0)/niceMax*innerH;
+          return(
+            <g key={i}>
+              <rect x={cx-barW-2} y={padT+innerH-hIng} width={barW} height={Math.max(0,hIng)} fill="#10C98A" rx="3"><title>{`${d.m}: ${fmt$(d.ing||0)}`}</title></rect>
+              <rect x={cx+2} y={padT+innerH-hGst} width={barW} height={Math.max(0,hGst)} fill="#F46B6B" rx="3"><title>{`${d.m}: ${fmt$(d.gst||0)}`}</title></rect>
+              <text x={cx} y={H-8} textAnchor="middle" fontSize="10" fill="var(--tx2)">{d.m}</text>
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{display:"flex",gap:16,justifyContent:"center",marginTop:6,fontSize:11,color:"var(--tx2)"}}>
+        <span><span style={{display:"inline-block",width:10,height:10,background:"#10C98A",borderRadius:2,marginRight:5,verticalAlign:"middle"}}/>Ingresos netos</span>
+        <span><span style={{display:"inline-block",width:10,height:10,background:"#F46B6B",borderRadius:2,marginRight:5,verticalAlign:"middle"}}/>Gastos</span>
+      </div>
+    </div>
+  );
+}
+function MiniPieChart({ data, colors, height=200 }){
+  if(!data||!data.length) return <div style={{height,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--tx3)",fontSize:12}}>Sin datos</div>;
+  const total=data.reduce((s,d)=>s+(d.value||0),0)||1;
+  const R=70,CX=85,CY=85;
+  let acc=-90;
+  const toXY=deg=>{const r=deg*Math.PI/180;return [CX+R*Math.cos(r),CY+R*Math.sin(r)];};
+  const slices=data.map((d,i)=>{
+    const frac=(d.value||0)/total, angle=frac*360, start=acc, end=acc+angle;
+    acc=end;
+    const large=angle>180?1:0;
+    let path;
+    if(frac>=0.9999){
+      path=`M ${CX-R} ${CY} A ${R} ${R} 0 1 1 ${CX+R-0.01} ${CY} A ${R} ${R} 0 1 1 ${CX-R} ${CY} Z`;
+    }else{
+      const [x1,y1]=toXY(start),[x2,y2]=toXY(end);
+      path=`M ${CX} ${CY} L ${x1} ${y1} A ${R} ${R} 0 ${large} 1 ${x2} ${y2} Z`;
+    }
+    const midDeg=start+angle/2, [lx,ly]=toXY.call(null,midDeg);
+    const labelR=R*0.65, lrad=midDeg*Math.PI/180;
+    return {d,path,color:colors[i%colors.length],pct:Math.round(frac*100),labelX:CX+labelR*Math.cos(lrad),labelY:CY+labelR*Math.sin(lrad)};
+  });
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",height,justifyContent:"center"}}>
+      <svg viewBox="0 0 170 170" style={{width:Math.min(height-30,170),height:Math.min(height-30,170)}}>
+        {slices.map((s,i)=>(
+          <g key={i}>
+            <path d={s.path} fill={s.color} stroke="var(--bg)" strokeWidth="1.5"><title>{`${s.d.name}: ${fmt$(s.d.value)} (${s.pct}%)`}</title></path>
+            {s.pct>=6&&<text x={s.labelX} y={s.labelY} textAnchor="middle" dominantBaseline="middle" fontSize="9" fill="#0a0f1a" fontWeight="700">{s.pct}%</text>}
+          </g>
+        ))}
+      </svg>
+      <div style={{display:"flex",flexWrap:"wrap",gap:"4px 12px",justifyContent:"center",marginTop:8,fontSize:11,color:"var(--tx2)",maxWidth:260}}>
+        {slices.map((s,i)=>(
+          <span key={i} style={{display:"flex",alignItems:"center",gap:5}}>
+            <span style={{width:9,height:9,borderRadius:"50%",background:s.color,display:"inline-block"}}/>
+            {s.d.name} ({s.pct}%)
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── VISTA: DASHBOARD ────────────────────────────────────────────────────────
 function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmData, crmSource, refrescarCRM }) {
   const cm=monthStr();
@@ -605,29 +714,12 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
         <div className="card">
           <div className="ctitle">📊 Ingresos vs Gastos (6 meses)</div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={chartData} margin={{top:4,right:8,left:0,bottom:0}}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--br)"/>
-              <XAxis dataKey="m" tick={{fill:"var(--tx2)",fontSize:11}} axisLine={false} tickLine={false}/>
-              <YAxis tick={{fill:"var(--tx2)",fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/>
-              <Tooltip content={<Tip/>}/>
-              <Bar dataKey="ing" fill="#10C98A" radius={[4,4,0,0]} name="Ingresos netos"/>
-              <Bar dataKey="gst" fill="#F46B6B" radius={[4,4,0,0]} name="Gastos"/>
-            </BarChart>
-          </ResponsiveContainer>
+          <MiniBarChart data={chartData} height={200}/>
         </div>
         {metodos.length>0&&(
           <div className="card">
             <div className="ctitle">💳 Método de Pago este mes</div>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={metodos} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={78} label={({name,percent})=>`${(percent*100).toFixed(0)}%`} labelLine={false}>
-                  {metodos.map((_,i)=><Cell key={i} fill={PIE[i%PIE.length]}/>)}
-                </Pie>
-                <Tooltip formatter={v=>fmt$(v)}/>
-                <Legend iconSize={10} wrapperStyle={{fontSize:11}}/>
-              </PieChart>
-            </ResponsiveContainer>
+            <MiniPieChart data={metodos} colors={PIE} height={200}/>
           </div>
         )}
       </div>
@@ -1364,16 +1456,7 @@ function Reportes({ ingresos, pagosGastos }) {
       </div>
       <div className="card">
         <div className="ctitle">📈 Balance Mensual (12 meses)</div>
-        <ResponsiveContainer width="100%" height={240}>
-          <BarChart data={monthly} margin={{top:4,right:8,left:0,bottom:0}}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--br)"/>
-            <XAxis dataKey="m" tick={{fill:"var(--tx2)",fontSize:10}} axisLine={false} tickLine={false}/>
-            <YAxis tick={{fill:"var(--tx2)",fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/>
-            <Tooltip content={<Tip/>}/>
-            <Bar dataKey="ing" fill="#10C98A" radius={[4,4,0,0]} name="Ingresos netos"/>
-            <Bar dataKey="gst" fill="#F46B6B" radius={[4,4,0,0]} name="Gastos"/>
-          </BarChart>
-        </ResponsiveContainer>
+        <MiniBarChart data={monthly} height={240}/>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:14}}>
         {[
@@ -1383,15 +1466,7 @@ function Reportes({ ingresos, pagosGastos }) {
         ].filter(({data})=>data.length>0).map(({title,data,colors})=>(
           <div key={title} className="card">
             <div className="ctitle">{title}</div>
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={78} label={({percent})=>`${(percent*100).toFixed(0)}%`} labelLine={false}>
-                  {data.map((_,i)=><Cell key={i} fill={colors[i%colors.length]}/>)}
-                </Pie>
-                <Tooltip formatter={v=>fmt$(v)}/>
-                <Legend iconSize={9} wrapperStyle={{fontSize:10}}/>
-              </PieChart>
-            </ResponsiveContainer>
+            <MiniPieChart data={data} colors={colors} height={220}/>
           </div>
         ))}
       </div>

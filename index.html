@@ -1,0 +1,1996 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Contabilidad — NOVA IA Academy</title>
+<link rel="icon" href="data:,">
+
+<!-- React 18 -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+
+<!-- Babel standalone — transpila el JSX en el navegador -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+
+<!-- Recharts (gráficas) -->
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js" crossorigin></script>
+
+<!-- XLSX (exportar Excel) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin></script>
+
+<!-- Firebase (sincronización con el CRM) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+
+<style>
+  html,body{margin:0;padding:0;background:#080E1A}
+  #root{min-height:100vh}
+  #boot{display:flex;align-items:center;justify-content:center;height:100vh;background:#080E1A;color:#8BA4C0;font-family:sans-serif}
+</style>
+</head>
+<body>
+<div id="root"><div id="boot">⚡ Cargando…</div></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback } = React;
+const {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, PieChart, Pie, Cell, Legend,
+} = Recharts;
+
+// ─── FIREBASE ──────────────────────────────────────────────────────────────────
+const firebaseConfig={
+  apiKey:"AIzaSyABsIwTXWmz6x5Fi34T47T8zY5i4-yadhw",
+  authDomain:"crm-nova-ia-academy.firebaseapp.com",
+  databaseURL:"https://crm-nova-ia-academy-default-rtdb.firebaseio.com",
+  projectId:"crm-nova-ia-academy",
+  storageBucket:"crm-nova-ia-academy.firebasestorage.app",
+  messagingSenderId:"339920574975",
+  appId:"1:339920574975:web:f1077b5e10627f9f4e2fca"
+};
+const CRM_AUTH_EMAIL='crm.nova.ia@gmail.com';
+const CRM_AUTH_PASS='NovaIA_CRM_2025!x9#kL';
+let _fbDb=null, _fbReady=null;
+function initFirebaseAuth(){
+  if(_fbReady) return _fbReady;
+  _fbReady=(async()=>{
+    try{
+      if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+      await firebase.auth().signInWithEmailAndPassword(CRM_AUTH_EMAIL,CRM_AUTH_PASS);
+      _fbDb=firebase.database();
+      return true;
+    }catch(e){ console.error('Firebase auth error:',e); return false; }
+  })();
+  return _fbReady;
+}
+
+// ─── CONSTANTES ────────────────────────────────────────────────────────────────
+const MP_BASE    = 0.035;
+const MP_IVA     = 0.16;
+
+const INCOME_CATS      = ["Mensualidad","Inscripción","Taller","Certificación","Material Didáctico","Servicio Extra","Otro"];
+const DEFAULT_EXPENSE_CATS = ["Renta","Electricidad","Internet","Agua","Salarios","Comisiones","Papelería","Publicidad","Mantenimiento","Impuestos","Software/Licencias","Equipos","Suscripciones","Otro"];
+
+// Currency helpers — moneda activa se pasa como prop o desde contexto
+const fmt$ = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n||0);
+const fmtUSD = n => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(n||0);
+const fmtMoney = (n, cur, rate) => cur==="USD"&&rate ? fmtUSD((n||0)/rate)+" (≈"+fmt$(n)+")" : fmt$(n);
+const fmtD = s => s ? new Date(s+"T12:00:00").toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"}) : "—";
+const todayStr  = () => new Date().toISOString().split("T")[0];
+const monthStr  = () => todayStr().slice(0,7);
+const uid       = () => Date.now().toString(36)+Math.random().toString(36).substr(2,6);
+const calcMP    = amount => {
+  const n = parseFloat(amount)||0;
+  const comm = +(n * MP_BASE).toFixed(2);
+  const iva  = +(comm * MP_IVA).toFixed(2);
+  return { comm, iva, total: +(comm+iva).toFixed(2), net: +(n-comm-iva).toFixed(2) };
+};
+
+// ─── STORAGE — sincronizado vía Firebase (nova_contabilidad), con respaldo local ──
+async function stor(cmd, key, val) {
+  const k = "acad_v1_" + key;
+  if (cmd === "set") {
+    try{ localStorage.setItem(k, JSON.stringify(val)); }catch{}
+    const ok=await initFirebaseAuth();
+    if(!ok||!_fbDb) return null;
+    try{ await _fbDb.ref('nova_contabilidad/'+key).set(val===undefined?null:val); return true; }
+    catch(e){ return null; }
+  }
+  if (cmd === "get") {
+    // Lectura inicial — el listener en tiempo real (App) sobreescribe esto al conectar
+    try{ const r=localStorage.getItem(k); return r?JSON.parse(r):null; }catch{ return null; }
+  }
+  return null;
+}
+
+// ─── CRM BRIDGE — Firebase autenticado, cross-device, tiempo real ──────────────
+async function loadCRM() {
+  const ok=await initFirebaseAuth();
+  if(ok&&_fbDb){
+    try{
+      const snap=await _fbDb.ref('nova_crm').once('value');
+      const d=snap.val();
+      if(d?.matrículas) return {...d,_source:"firebase"};
+    }catch(e){}
+  }
+  // Respaldo: copia local del CRM en este mismo navegador
+  try {
+    const l = localStorage.getItem("nova_crm_v4");
+    if (l) { const d = JSON.parse(l); if (d?.matrículas) return { ...d, _source: "local" }; }
+  } catch {}
+  return null;
+}
+// Extraer lista única de alumnos del CRM (por nombre)
+function crmAlumnos(crm) {
+  if (!crm?.matrículas) return [];
+  const seen = new Set();
+  return crm.matrículas.filter(m => { if (seen.has(m.alumno)) return false; seen.add(m.alumno); return true; });
+}
+// Costo base de un curso del CRM
+function crmCostoCurso(crm, nombreCurso) {
+  if (!crm?.cursos) return 0;
+  const cur = crm.cursos.find(c => c.nombre === nombreCurso || c.name === nombreCurso);
+  return cur ? (parseFloat(String(cur.costoBase||"").replace(/[^0-9.]/g,""))||0) : 0;
+}
+
+
+// ─── COMISIONES DE EMPLEADOS ─────────────────────────────────────────────────
+// $120 por contrato creado y confirmado de pago (1 vez, no recurrente).
+// Se cuenta en el mes en que se CREÓ el contrato (mesGanado);
+// se liquida el día 15 del mes siguiente (mesPago).
+const COMISION_POR_CONTRATO = 120;
+
+function nextMonth(ym){
+  const [y,m]=ym.split('-').map(Number);
+  let ny=y, nm=m+1;
+  if(nm>12){nm=1;ny++;}
+  return `${ny}-${String(nm).padStart(2,'0')}`;
+}
+
+function calcComisiones(crmData){
+  if(!crmData?.matrículas) return [];
+  const usuarios = crmData.usuarios||[];
+  const pagosReg = crmData.pagosRegulares||[];
+  const nombreDe = (u)=>{
+    const us=usuarios.find(x=>x.username===u);
+    return us?.name||u||"Sin asignar";
+  };
+  const grupos={};
+  crmData.matrículas.forEach(m=>{
+    if(!m.fechaISO||!m.createdBy) return;
+    // "Pagado y confirmado": existe al menos un pago registrado para este folio
+    const pagado=pagosReg.some(p=>String(p.crmFolio)===String(m.folio));
+    if(!pagado) return;
+    const mesGanado=m.fechaISO.slice(0,7);
+    const key=m.createdBy+"|"+mesGanado;
+    if(!grupos[key]) grupos[key]={usuario:m.createdBy,nombreUsuario:nombreDe(m.createdBy),mesGanado,folios:[]};
+    grupos[key].folios.push(m.folio);
+  });
+  return Object.values(grupos).map(g=>{
+    const mesPago=nextMonth(g.mesGanado);
+    return {...g,count:g.folios.length,monto:g.folios.length*COMISION_POR_CONTRATO,mesPago,fechaPagoDefault:`${mesPago}-15`};
+  }).sort((a,b)=>b.mesGanado.localeCompare(a.mesGanado)||a.nombreUsuario.localeCompare(b.nombreUsuario));
+}
+
+// ─── ESTILOS ───────────────────────────────────────────────────────────────────
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080E1A; --s1:#0F1827; --s2:#182336; --s3:#1E2D42;
+  --br:#253448; --br2:#1a2a3a;
+  --tx:#E4EEF8; --tx2:#8BA4C0; --tx3:#4A6380;
+  --ac:#22D4EF; --ac2:rgba(34,212,239,.12);
+  --gr:#10C98A; --gr2:rgba(16,201,138,.12);
+  --rd:#F46B6B; --rd2:rgba(244,107,107,.12);
+  --am:#F5C147; --am2:rgba(245,193,71,.12);
+  --pu:#9B72F8; --pu2:rgba(155,114,248,.12);
+  --mono:"JetBrains Mono",monospace; --sans:"Outfit",sans-serif;
+  --r:10px; --r2:14px;
+}
+body{font-family:var(--sans);background:var(--bg);color:var(--tx);min-height:100vh}
+.app{min-height:100vh;display:flex;flex-direction:column}
+/* CRM INTEGRATION */
+.b-crm{background:rgba(155,114,248,.15);color:#9B72F8;border:1px solid rgba(155,114,248,.3)}
+.crm-banner{background:linear-gradient(135deg,rgba(155,114,248,.12),rgba(34,212,239,.08));border:1px solid rgba(155,114,248,.3);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.crm-off{background:rgba(74,99,128,.06);border:1px dashed var(--br);border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;opacity:.7;font-size:12px}
+.alm-drop{position:relative}
+.alm-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--s2);border:1px solid var(--ac);border-radius:var(--r);z-index:200;max-height:220px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.alm-opt{padding:10px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--br);transition:background .1s}
+.alm-opt:hover{background:var(--ac2)} .alm-opt:last-child{border-bottom:none}
+.alm-opt-name{font-weight:600;color:var(--tx)} .alm-opt-sub{font-size:10px;color:var(--tx3);margin-top:2px}
+.crm-prefill{background:rgba(34,212,239,.07);border:1px solid rgba(34,212,239,.2);border-radius:8px;padding:9px 13px;font-size:12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;color:var(--ac)}
+.alm-row{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--br);transition:background .1s}
+.alm-row:last-child{border-bottom:none} .alm-row:hover{background:var(--s2)}
+.alm-paid{border-left:3px solid var(--gr)} .alm-due{border-left:3px solid var(--rd)} .alm-neu{border-left:3px solid var(--br)}
+.alm-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--pu),var(--ac));display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;color:#fff}
+.course-tag{display:inline-block;background:rgba(155,114,248,.15);color:var(--pu);border-radius:20px;padding:2px 9px;font-size:10px;font-weight:600;border:1px solid rgba(155,114,248,.2)}
+
+/* HEADER */
+.hdr{background:var(--s1);border-bottom:1px solid var(--br);padding:14px 20px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:90;backdrop-filter:blur(8px)}
+.hdr-logo{width:38px;height:38px;background:linear-gradient(135deg,#22D4EF,#0EA5E9);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;box-shadow:0 4px 12px rgba(34,212,239,.3)}
+.hdr-title{font-size:16px;font-weight:700;letter-spacing:-.3px}
+.hdr-sub{font-size:11px;color:var(--tx2);margin-top:2px;text-transform:capitalize}
+
+/* NAV */
+.nav{background:var(--s1);border-bottom:1px solid var(--br2);padding:0 16px;display:flex;overflow-x:auto;scrollbar-width:none;gap:2px}
+.nav::-webkit-scrollbar{display:none}
+.ntab{display:flex;align-items:center;gap:5px;padding:11px 14px;color:var(--tx2);font-size:13px;font-weight:500;cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap;font-family:var(--sans)}
+.ntab:hover{color:var(--tx);background:var(--ac2)}
+.ntab.active{color:var(--ac);border-bottom-color:var(--ac)}
+
+/* CONTENT */
+.cnt{flex:1;padding:20px;overflow-y:auto}
+
+/* CARDS */
+.card{background:var(--s1);border:1px solid var(--br);border-radius:var(--r2);padding:20px;margin-bottom:14px}
+.ctitle{font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px;display:flex;align-items:center;gap:6px}
+
+/* STATS */
+.sgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px}
+.scard{background:var(--s1);border:1px solid var(--br);border-radius:var(--r2);padding:18px 20px;position:relative;overflow:hidden;transition:border-color .2s}
+.scard::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--stripe,var(--ac))}
+.slabel{font-size:11px;color:var(--tx2);font-weight:500;margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px}
+.sval{font-size:22px;font-weight:700;font-family:var(--mono);color:var(--vcol,var(--tx));letter-spacing:-.5px;line-height:1}
+.ssub{font-size:11px;color:var(--tx3);margin-top:5px}
+
+/* FORMS */
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+.fgrp{display:flex;flex-direction:column;gap:5px}
+.flbl{font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:.4px}
+.finp{background:var(--s2);border:1px solid var(--br);border-radius:var(--r);padding:9px 12px;color:var(--tx);font-size:14px;font-family:var(--sans);transition:border-color .15s;width:100%}
+.finp:focus{outline:none;border-color:var(--ac)}
+.finp::placeholder{color:var(--tx3)}
+select.finp option{background:var(--s2)}
+textarea.finp{resize:vertical;min-height:72px}
+
+/* BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .15s;font-family:var(--sans);white-space:nowrap}
+.btn-p{background:var(--ac);color:#080E1A}.btn-p:hover{background:#1cc4de}
+.btn-g{background:var(--gr);color:#080E1A}.btn-g:hover{background:#0fb87a}
+.btn-d{background:var(--rd2);color:var(--rd);border:1px solid rgba(244,107,107,.4)}.btn-d:hover{background:rgba(244,107,107,.2)}
+.btn-o{background:var(--s2);color:var(--tx2);border:1px solid var(--br)}.btn-o:hover{color:var(--tx);border-color:var(--tx3)}
+.btn-am{background:var(--am2);color:var(--am);border:1px solid rgba(245,193,71,.4)}
+.btn-sm{padding:5px 11px;font-size:12px}
+
+/* TABLE */
+.twrap{overflow-x:auto;border-radius:var(--r);border:1px solid var(--br)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{background:var(--s2);color:var(--tx2);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:9px 13px;text-align:left;border-bottom:1px solid var(--br);white-space:nowrap}
+tbody tr{border-bottom:1px solid var(--br2);transition:background .1s}
+tbody tr:hover{background:var(--s2)}
+tbody tr:last-child{border-bottom:none}
+td{padding:11px 13px;color:var(--tx);vertical-align:middle}
+
+/* BADGES */
+.badge{display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:600;white-space:nowrap}
+.b-gr{background:var(--gr2);color:var(--gr)}
+.b-rd{background:var(--rd2);color:var(--rd)}
+.b-am{background:var(--am2);color:var(--am)}
+.b-ac{background:var(--ac2);color:var(--ac)}
+.b-pu{background:var(--pu2);color:var(--pu)}
+.b-gy{background:rgba(74,99,128,.2);color:var(--tx2)}
+
+/* ALERTS */
+.alert{border-radius:var(--r);padding:14px;margin-bottom:14px;display:flex;gap:12px;align-items:flex-start;font-size:13px}
+.al-am{background:var(--am2);border:1px solid rgba(245,193,71,.3);color:var(--am)}
+.al-rd{background:var(--rd2);border:1px solid rgba(244,107,107,.3);color:var(--rd)}
+.al-ac{background:var(--ac2);border:1px solid rgba(34,212,239,.3);color:var(--ac)}
+.al-gr{background:var(--gr2);border:1px solid rgba(16,201,138,.3);color:var(--gr)}
+
+/* MODAL */
+.moverlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(6px)}
+.modal{background:var(--s1);border:1px solid var(--br);border-radius:var(--r2);padding:26px;width:100%;max-width:600px;max-height:90vh;overflow-y:auto}
+.mhdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}
+.mtitle{font-size:18px;font-weight:700}
+.mclose{background:none;border:none;color:var(--tx3);cursor:pointer;font-size:18px;padding:0;line-height:1;transition:color .15s}
+.mclose:hover{color:var(--tx)}
+
+/* COMMISSION BOX */
+.cbox{background:var(--s2);border:1px solid rgba(245,193,71,.4);border-radius:var(--r);padding:16px;margin-top:14px}
+.crow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:13px}
+.crow.ctotal{border-top:1px solid var(--br);margin-top:8px;padding-top:11px;font-weight:700;font-size:15px}
+
+/* EMPTY */
+.empty{text-align:center;padding:48px 24px;color:var(--tx3)}
+.empty-icon{font-size:44px;margin-bottom:10px}
+.empty-ttl{font-size:15px;font-weight:600;color:var(--tx2)}
+.empty-sub{font-size:12px;margin-top:5px}
+
+/* MISC */
+.sec-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px}
+.sec-ttl{font-size:19px;font-weight:700;display:flex;align-items:center;gap:8px}
+.fbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+.finput{background:var(--s2);border:1px solid var(--br);border-radius:8px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:var(--sans)}
+.finput:focus{outline:none;border-color:var(--ac)}
+.mono{font-family:var(--mono)}
+.tr{text-align:right}
+.tc{color:var(--ac)} .tg{color:var(--gr)} .tr2{color:var(--rd)} .ta{color:var(--am)} .td{color:var(--tx2)}
+.mini-stat{background:var(--s1);border:1px solid var(--br);border-radius:8px;padding:11px 14px}
+.ms-label{font-size:10px;color:var(--tx3);font-weight:500;text-transform:uppercase;letter-spacing:.4px}
+.ms-val{font-size:15px;font-weight:700;font-family:var(--mono);margin-top:3px}
+.exp-item{background:var(--s1);border:1px solid var(--br);border-radius:var(--r2);padding:15px 18px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;transition:border-color .2s}
+.ctooltip{background:var(--s2);border:1px solid var(--br);border-radius:8px;padding:10px 13px;font-size:12px;color:var(--tx)}
+`;
+
+// ─── MODAL: RECORDATORIOS ────────────────────────────────────────────────────
+function ModalRecordatorios({ pagos, onClose }) {
+  const vencidos  = pagos.filter(p => p.isOverdue);
+  const proximos  = pagos.filter(p => !p.isOverdue);
+  return (
+    <div className="moverlay" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="modal" style={{maxWidth:520}}>
+        <div className="mhdr">
+          <div>
+            <div className="mtitle">⏰ Recordatorio de Pagos</div>
+            <div style={{fontSize:12,color:"var(--tx2)",marginTop:3,textTransform:"capitalize"}}>
+              {new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+            </div>
+          </div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        {vencidos.length>0&&<>
+          <div style={{fontSize:11,fontWeight:700,color:"var(--rd)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8}}>🚨 Vencidos</div>
+          {vencidos.map(p=>(
+            <div key={p.id} style={{background:"var(--rd2)",border:"1px solid rgba(244,107,107,.4)",borderRadius:8,padding:"12px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+              <div><div style={{fontWeight:600,fontSize:14}}>{p.description}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{p.category} · Día {p.dueDay}</div></div>
+              <div style={{textAlign:"right"}}><div className="mono" style={{color:"var(--rd)",fontWeight:700}}>{fmt$(p.amount)}</div><div style={{fontSize:11,color:"var(--rd)",marginTop:2}}>{Math.abs(p.daysUntilDue)} día(s) vencido</div></div>
+            </div>
+          ))}
+        </>}
+        {proximos.length>0&&<div style={{marginTop:vencidos.length>0?14:0}}>
+          <div style={{fontSize:11,fontWeight:700,color:"var(--am)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8}}>📅 Esta semana</div>
+          {proximos.map(p=>(
+            <div key={p.id} style={{background:"var(--am2)",border:"1px solid rgba(245,193,71,.4)",borderRadius:8,padding:"12px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+              <div><div style={{fontWeight:600,fontSize:14}}>{p.description}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{p.category} · Día {p.dueDay} de cada mes</div></div>
+              <div style={{textAlign:"right"}}><div className="mono" style={{fontWeight:700}}>{fmt$(p.amount)}</div><div style={{fontSize:11,color:"var(--am)",marginTop:2}}>{p.daysUntilDue===0?"¡Hoy!":p.daysUntilDue===1?"Mañana":`En ${p.daysUntilDue} días`}</div></div>
+            </div>
+          ))}
+        </div>}
+        <div style={{marginTop:18,textAlign:"right"}}>
+          <button className="btn btn-p" onClick={onClose}>Entendido</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: AGREGAR INGRESO ──────────────────────────────────────────────────
+function ModalIngreso({ onSave, onClose, crmData, prefill }) {
+  const [f, setF] = useState({
+    date:todayStr(), desc:"", alumno:"", cursoRef:"", crmFolio:"",
+    monto:"", method:"cash", cat:"Mensualidad", notas:"",
+    ...(prefill||{})
+  });
+  const set = (k,v) => setF(p=>({...p,[k]:v}));
+  const mp = useMemo(()=> f.method==="card"?calcMP(f.monto):null,[f.method,f.monto]);
+  const [showDrop, setShowDrop] = useState(false);
+  const [almQ, setAlmQ] = useState("");
+
+  const alumnos = useMemo(()=> crmAlumnos(crmData),[crmData]);
+  const almFiltered = useMemo(()=>
+    almQ ? alumnos.filter(a=>a.alumno.toLowerCase().includes(almQ.toLowerCase())||a.curso.toLowerCase().includes(almQ.toLowerCase())) : alumnos
+  ,[alumnos,almQ]);
+
+  function selAlumno(m) {
+    const costo = crmCostoCurso(crmData, m.curso);
+    setF(p=>({
+      ...p, alumno:m.alumno, cursoRef:m.curso, crmFolio:String(m.folio),
+      monto: costo > 0 ? costo.toString() : p.monto,
+      desc: p.desc || `Mensualidad ${new Date().toLocaleDateString("es-MX",{month:"long",year:"numeric"})} — ${m.curso}`,
+    }));
+    setShowDrop(false); setAlmQ("");
+  }
+
+  function guardar(){
+    if(!f.date||!f.desc||!f.monto) return;
+    const n=parseFloat(f.monto);
+    const c=f.method==="card"?calcMP(n):{comm:0,iva:0,total:0,net:n};
+    onSave({id:uid(),...f,monto:n,comm:c.comm,ivaComm:c.iva,totalDed:c.total,neto:c.net,createdAt:new Date().toISOString()});
+  }
+
+  const methods=[["cash","💵 Efectivo"],["transfer","🏦 Transferencia"],["card","💳 Terminal MP"]];
+  return(
+    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal">
+        <div className="mhdr"><div className="mtitle">💰 Registrar Ingreso</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div className="fgrid">
+          <div className="fgrp"><label className="flbl">Fecha *</label><input className="finp" type="date" value={f.date} onChange={e=>set("date",e.target.value)}/></div>
+          <div className="fgrp"><label className="flbl">Categoría</label><select className="finp" value={f.cat} onChange={e=>set("cat",e.target.value)}>{INCOME_CATS.map(c=><option key={c}>{c}</option>)}</select></div>
+
+          {/* ── CRM: Selector de alumno ── */}
+          <div className="fgrp" style={{gridColumn:"1/-1"}}>
+            <label className="flbl">
+              {alumnos.length>0 ? "👤 Alumno del CRM" : "Nombre del Alumno"}
+            </label>
+            {alumnos.length>0 ? (
+              <div className="alm-drop">
+                <input className="finp" placeholder="Buscar alumno del CRM..." value={almQ||f.alumno}
+                  onFocus={()=>setShowDrop(true)}
+                  onChange={e=>{setAlmQ(e.target.value); if(!showDrop)setShowDrop(true);}}
+                  onBlur={()=>setTimeout(()=>setShowDrop(false),180)}
+                />
+                {showDrop&&almFiltered.length>0&&(
+                  <div className="alm-menu">
+                    {almFiltered.map(m=>(
+                      <div key={m.folio} className="alm-opt" onMouseDown={()=>selAlumno(m)}>
+                        <div className="alm-opt-name">{m.alumno}</div>
+                        <div className="alm-opt-sub">📚 {m.curso} · Folio #{m.folio}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ):(
+              <input className="finp" placeholder="Ej: María López" value={f.alumno} onChange={e=>set("alumno",e.target.value)}/>
+            )}
+            {f.crmFolio&&(
+              <div className="crm-prefill" style={{marginTop:6}}>
+                🔗 CRM vinculado — <strong>{f.alumno}</strong> · Folio #{f.crmFolio}
+                {f.cursoRef&&<> · <span className="course-tag">{f.cursoRef}</span></>}
+                <button style={{marginLeft:"auto",background:"none",border:"none",color:"var(--tx3)",cursor:"pointer",fontSize:11}} onClick={()=>set("crmFolio","")}>✕ Desvincular</button>
+              </div>
+            )}
+          </div>
+
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Descripción *</label><input className="finp" placeholder="Ej: Mensualidad Junio 2026" value={f.desc} onChange={e=>set("desc",e.target.value)}/></div>
+          <div className="fgrp"><label className="flbl">Monto Cobrado (MXN) *</label><input className="finp mono" type="number" min="0" step="0.01" placeholder="0.00" value={f.monto} onChange={e=>set("monto",e.target.value)}/></div>
+          <div className="fgrp">
+            <label className="flbl">Método de Pago</label>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {methods.map(([k,l])=><button key={k} className={`btn ${f.method===k?"btn-p":"btn-o"}`} style={{flex:1}} onClick={()=>set("method",k)}>{l}</button>)}
+            </div>
+          </div>
+          {f.method==="card"&&mp&&parseFloat(f.monto)>0&&(
+            <div style={{gridColumn:"1/-1"}}>
+              <div className="cbox">
+                <div style={{fontSize:11,fontWeight:700,color:"var(--am)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:12}}>💳 Desglose Comisión — Mercado Pago Point</div>
+                <div className="crow"><span style={{color:"var(--tx2)"}}>Monto cobrado al cliente</span><span className="mono">{fmt$(parseFloat(f.monto))}</span></div>
+                <div className="crow"><span style={{color:"var(--tx2)"}}>Comisión MP (3.50%)</span><span className="mono tr2">-{fmt$(mp.comm)}</span></div>
+                <div className="crow"><span style={{color:"var(--tx2)"}}>IVA sobre comisión (16%)</span><span className="mono tr2">-{fmt$(mp.iva)}</span></div>
+                <div className="crow"><span style={{color:"var(--tx2)"}}>Total deducido por MP</span><span className="mono tr2">-{fmt$(mp.total)}</span></div>
+                <div className="crow ctotal"><span>💰 Lo que llega a tu cuenta</span><span className="mono tg">{fmt$(mp.net)}</span></div>
+                <div style={{fontSize:10,color:"var(--tx3)",marginTop:10}}>Tasa efectiva total: {((mp.total/parseFloat(f.monto))*100).toFixed(2)}% · Comisión: 3.50% + IVA (16% sobre comisión)</div>
+              </div>
+            </div>
+          )}
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Notas</label><textarea className="finp" placeholder="Referencia, observaciones..." value={f.notas} onChange={e=>set("notas",e.target.value)}/></div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:18}}>
+          <button className="btn btn-o" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-g" onClick={guardar} disabled={!f.date||!f.desc||!f.monto}>✓ Guardar Ingreso</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: AGREGAR GASTO FIJO ───────────────────────────────────────────────
+function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
+  const cats = expenseCats || DEFAULT_EXPENSE_CATS;
+  const [f,setF]=useState(initial||{desc:"",monto:"",dia:1,cat:cats[0]||"Renta",notas:"",enDolares:false});
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const [newCat,setNewCat]=useState(""); const [showCat,setShowCat]=useState(false);
+  function guardar(){ if(!f.desc||!f.monto) return; onSave({id:initial?.id||uid(),...f,monto:parseFloat(f.monto),dia:parseInt(f.dia),active:initial?.active!==undefined?initial.active:true,createdAt:initial?.createdAt||new Date().toISOString()}); }
+  function addCat(){ if(newCat.trim()){ onSave({__addCat:newCat.trim()}); setNewCat(""); setShowCat(false); } }
+  return(
+    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:520}}>
+        <div className="mhdr"><div className="mtitle">{initial?"✏️ Editar Gasto Fijo":"📋 Nuevo Gasto Fijo"}</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div className="fgrid">
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Descripción *</label><input className="finp" placeholder="Ej: Renta del local" value={f.desc} onChange={e=>set("desc",e.target.value)}/></div>
+          <div className="fgrp">
+            <label className="flbl">Monto *</label>
+            <input className="finp mono" type="number" min="0" step="0.01" placeholder="0.00" value={f.monto} onChange={e=>set("monto",e.target.value)}/>
+            <label style={{display:"flex",alignItems:"center",gap:6,marginTop:6,fontSize:12,cursor:"pointer",color:"var(--tx2)"}}>
+              <input type="checkbox" checked={!!f.enDolares} onChange={e=>set("enDolares",e.target.checked)}/>
+              💵 El monto está en USD (se convierte a MXN automáticamente)
+            </label>
+          </div>
+          <div className="fgrp"><label className="flbl">Día de Pago (1-31)</label><input className="finp" type="number" min="1" max="31" value={f.dia} onChange={e=>set("dia",e.target.value)}/></div>
+          <div className="fgrp" style={{gridColumn:"1/-1"}}>
+            <label className="flbl">Categoría</label>
+            <div style={{display:"flex",gap:6}}>
+              <select className="finp" style={{flex:1}} value={f.cat} onChange={e=>set("cat",e.target.value)}>{cats.map(c=><option key={c}>{c}</option>)}</select>
+              <button className="btn btn-o btn-sm" title="Nueva categoría" onClick={()=>setShowCat(!showCat)}>＋</button>
+            </div>
+            {showCat&&<div style={{display:"flex",gap:6,marginTop:6}}>
+              <input className="finp" placeholder="Nombre de la nueva categoría" value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()}/>
+              <button className="btn btn-g btn-sm" onClick={addCat}>Agregar</button>
+            </div>}
+          </div>
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Notas</label><textarea className="finp" placeholder="Proveedor, referencia..." value={f.notas} onChange={e=>set("notas",e.target.value)}/></div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:18}}>
+          <button className="btn btn-o" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-p" onClick={guardar} disabled={!f.desc||!f.monto}>✓ {initial?"Guardar cambios":"Agregar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: PAGAR GASTO ──────────────────────────────────────────────────────
+function ModalPagarGasto({ gasto, onSave, onClose }) {
+  const [f,setF]=useState({fecha:todayStr(),monto:gasto.monto.toString(),notas:""});
+  return(
+    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:440}}>
+        <div className="mhdr"><div className="mtitle">✅ Registrar Pago</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div style={{background:"var(--s2)",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:14}}>
+          <span style={{color:"var(--tx2)"}}>Gasto: </span><strong>{gasto.desc}</strong>
+        </div>
+        <div className="fgrid">
+          <div className="fgrp"><label className="flbl">Fecha de Pago</label><input className="finp" type="date" value={f.fecha} onChange={e=>setF(p=>({...p,fecha:e.target.value}))}/></div>
+          <div className="fgrp"><label className="flbl">Monto Pagado</label><input className="finp mono" type="number" value={f.monto} onChange={e=>setF(p=>({...p,monto:e.target.value}))}/></div>
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Notas / Referencia</label><input className="finp" placeholder="Folio, comprobante..." value={f.notas} onChange={e=>setF(p=>({...p,notas:e.target.value}))}/></div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:18}}>
+          <button className="btn btn-o" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-g" onClick={()=>onSave({...f,monto:parseFloat(f.monto)})}>✓ Confirmar Pago</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── VISTA: DASHBOARD ────────────────────────────────────────────────────────
+function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmData, crmSource, refrescarCRM }) {
+  const cm=monthStr();
+  const cmLabel=new Date().toLocaleDateString("es-MX",{month:"long",year:"numeric"});
+
+  const incMes   = ingresos.filter(i=>i.date.startsWith(cm));
+  const gastMes  = pagosGastos.filter(g=>g.mes===cm);
+  const bruto    = incMes.reduce((s,i)=>s+i.monto,0);
+  const neto     = incMes.reduce((s,i)=>s+i.neto,0);
+  const gastoT   = gastMes.reduce((s,g)=>s+g.monto,0);
+  const balance  = neto - gastoT;
+  const pendAmt  = gastosFijos.filter(fe=>fe.active&&!pagosGastos.some(p=>p.gastoId===fe.id&&p.mes===cm)).reduce((s,fe)=>s+fe.monto,0);
+
+  const chartData = useMemo(()=>{
+    return Array.from({length:6},(_,i)=>{
+      const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-5+i);
+      const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      return{
+        m:d.toLocaleDateString("es-MX",{month:"short"}),
+        ing:+ingresos.filter(x=>x.date.startsWith(ym)).reduce((s,x)=>s+x.neto,0).toFixed(2),
+        gst:+pagosGastos.filter(x=>x.mes===ym).reduce((s,x)=>s+x.monto,0).toFixed(2),
+      };
+    });
+  },[ingresos,pagosGastos]);
+
+  const metodos = useMemo(()=>{
+    const m={Efectivo:0,Transferencia:0,"Terminal MP":0};
+    incMes.forEach(i=>{m[i.method==="cash"?"Efectivo":i.method==="transfer"?"Transferencia":"Terminal MP"]+=i.monto;});
+    return Object.entries(m).filter(([,v])=>v>0).map(([name,value])=>({name,value:+value.toFixed(2)}));
+  },[incMes]);
+
+  const PIE=["#22D4EF","#10C98A","#9B72F8"];
+  const Tip=({active,payload,label})=>active&&payload?.length?(
+    <div className="ctooltip"><div style={{fontWeight:600,marginBottom:5}}>{label}</div>
+      {payload.map((p,i)=><div key={i} style={{color:p.color}}>{p.name}: {fmt$(p.value)}</div>)}</div>
+  ):null;
+
+  return(
+    <div>
+      {upcoming.length>0&&(
+        <div className={`alert ${upcoming.some(p=>p.isOverdue)?"al-rd":"al-am"}`} style={{cursor:"pointer"}} onClick={()=>setTab("gastos")}>
+          <span style={{fontSize:20}}>{upcoming.some(p=>p.isOverdue)?"🚨":"⏰"}</span>
+          <div>
+            <div style={{fontWeight:700,color:"var(--tx)"}}>{upcoming.filter(p=>p.isOverdue).length>0?`${upcoming.filter(p=>p.isOverdue).length} pago(s) VENCIDO(s) — Requiere atención`:`${upcoming.length} pago(s) próximo(s) esta semana`}</div>
+            <div style={{fontSize:12,marginTop:2,opacity:.85}}>Pendiente total: {fmt$(pendAmt)} · Clic para ir a Gastos Fijos</div>
+          </div>
+        </div>
+      )}
+
+      <div style={{fontSize:12,color:"var(--tx2)",marginBottom:14,textTransform:"capitalize"}}>📅 Resumen de {cmLabel}</div>
+
+      <div className="sgrid">
+        {[
+          {label:"Ingresos del Mes (Bruto)",val:fmt$(bruto),sub:`${incMes.length} cobros`,stripe:"var(--gr)",vcol:"var(--gr)"},
+          {label:"Neto en tu Cuenta",val:fmt$(neto),sub:"Después de comisiones MP",stripe:"var(--ac)",vcol:"var(--ac)"},
+          {label:"Gastos Pagados",val:fmt$(gastoT),sub:`${gastMes.length} pagos`,stripe:"var(--rd)",vcol:"var(--rd)"},
+          {label:"Balance del Mes",val:(balance>=0?"+":"")+fmt$(balance),sub:balance>=0?"Superávit":"Déficit",stripe:balance>=0?"var(--gr)":"var(--rd)",vcol:balance>=0?"var(--gr)":"var(--rd)"},
+        ].map(({label,val,sub,stripe,vcol})=>(
+          <div key={label} className="scard" style={{"--stripe":stripe,"--vcol":vcol}}>
+            <div className="slabel">{label}</div>
+            <div className="sval">{val}</div>
+            <div className="ssub">{sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
+        <div className="card">
+          <div className="ctitle">📊 Ingresos vs Gastos (6 meses)</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={chartData} margin={{top:4,right:8,left:0,bottom:0}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--br)"/>
+              <XAxis dataKey="m" tick={{fill:"var(--tx2)",fontSize:11}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fill:"var(--tx2)",fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/>
+              <Tooltip content={<Tip/>}/>
+              <Bar dataKey="ing" fill="#10C98A" radius={[4,4,0,0]} name="Ingresos netos"/>
+              <Bar dataKey="gst" fill="#F46B6B" radius={[4,4,0,0]} name="Gastos"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        {metodos.length>0&&(
+          <div className="card">
+            <div className="ctitle">💳 Método de Pago este mes</div>
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie data={metodos} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={78} label={({name,percent})=>`${(percent*100).toFixed(0)}%`} labelLine={false}>
+                  {metodos.map((_,i)=><Cell key={i} fill={PIE[i%PIE.length]}/>)}
+                </Pie>
+                <Tooltip formatter={v=>fmt$(v)}/>
+                <Legend iconSize={10} wrapperStyle={{fontSize:11}}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {ingresos.length>0&&(
+        <div className="card" style={{marginTop:14}}>
+          <div className="ctitle">🕐 Últimos 5 Ingresos</div>
+          <div className="twrap">
+            <table>
+              <thead><tr><th>Fecha</th><th>Descripción</th><th>Alumno</th><th>Método</th><th className="tr">Cobrado</th><th className="tr">En Cuenta</th></tr></thead>
+              <tbody>
+                {[...ingresos].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5).map(i=>(
+                  <tr key={i.id}>
+                    <td className="mono" style={{fontSize:11,color:"var(--tx2)"}}>{fmtD(i.date)}</td>
+                    <td style={{fontWeight:500}}>{i.desc}</td>
+                    <td style={{color:"var(--tx2)",fontSize:12}}>{i.alumno||"—"}{i.crmFolio&&<span style={{marginLeft:4,fontSize:9,color:"var(--pu)"}}>CRM</span>}</td>
+                    <td><span className={`badge ${i.method==="cash"?"b-gr":i.method==="transfer"?"b-ac":"b-pu"}`}>{i.method==="cash"?"💵 Efectivo":i.method==="transfer"?"🏦 Transferencia":"💳 Terminal"}</span></td>
+                    <td className="mono tr">{fmt$(i.monto)}</td>
+                    <td className="mono tr tg" style={{fontWeight:600}}>{fmt$(i.neto)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Panel CRM en Dashboard ── */}
+      {crmData ? (() => {
+        const alumnos = crmAlumnos(crmData);
+        const cm = monthStr();
+        const pagadosMes = new Set([
+          ...ingresos.filter(i=>i.date.startsWith(cm)&&i.alumno).map(i=>i.alumno),
+          ...(crmData.pagosRegulares||[]).filter(p=>(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm))).map(p=>p.alumnoNombre)
+        ]);
+        const morosos = alumnos.filter(a=>!pagadosMes.has(a.alumno));
+        const cursoCount = (crmData.cursos||[]).length;
+        const ingresoCRM = (crmData.pagosRegulares||[]).filter(p=>(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm))).reduce((s,p)=>s+(p.montoFinal||0),0);
+        return (
+          <div className="crm-banner" style={{marginTop:14,flexDirection:"column",alignItems:"flex-start",gap:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,width:"100%"}}>
+              <span style={{fontSize:22}}>🔗</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,color:"var(--pu)",fontSize:13}}>CRM NOVA IA Academy</div>
+                <div style={{fontSize:11,marginTop:2,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  <span style={{color:"var(--tx2)"}}>{alumnos.length} alumnos · {cursoCount} cursos</span>
+                  {crmSource==="firebase"&&<span style={{background:"rgba(16,201,138,.15)",color:"var(--gr)",border:"1px solid rgba(16,201,138,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>☁️ Firebase — Tiempo real · cualquier dispositivo</span>}
+                  {crmSource==="claude"&&<span style={{background:"rgba(34,212,239,.1)",color:"var(--ac)",border:"1px solid rgba(34,212,239,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>🔵 Claude Storage — mismo navegador</span>}
+                  {crmSource==="local"&&<span style={{background:"rgba(245,193,71,.1)",color:"var(--am)",border:"1px solid rgba(245,193,71,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>💾 Local — solo esta computadora</span>}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button className="btn btn-sm" style={{background:"rgba(155,114,248,.2)",color:"var(--pu)",border:"1px solid rgba(155,114,248,.3)"}} onClick={refrescarCRM} title="Actualizar ahora">⟳</button>
+                <button className="btn btn-sm" style={{background:"rgba(155,114,248,.2)",color:"var(--pu)",border:"1px solid rgba(155,114,248,.3)"}} onClick={()=>setTab("alumnos")}>Ver Alumnos →</button>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:13}}>
+              <span>✅ Pagaron {cmLabel}: <strong style={{color:"var(--gr)"}}>{alumnos.length - morosos.length}</strong></span>
+              <span>⚠️ Sin pago: <strong style={{color:morosos.length>0?"var(--rd)":"var(--tx2)"}}>{morosos.length}</strong></span>
+              {ingresoCRM>0&&<span>💳 Pagos CRM: <strong style={{color:"var(--pu)",fontFamily:"var(--mono)"}}>{fmt$(ingresoCRM)}</strong></span>}
+              {morosos.length>0&&<span style={{color:"var(--tx3)",fontSize:11}}>{morosos.slice(0,3).map(a=>a.alumno.split(" ")[0]).join(", ")}{morosos.length>3?` +${morosos.length-3} más`:""}</span>}
+            </div>
+          </div>
+        );
+      })() : (
+        <div className="crm-off" style={{marginTop:14}}>
+          <span>🔌</span>
+          <div><strong>CRM no conectado</strong> — Abre el CRM NOVA IA Academy para sincronizar alumnos y detectar morosos automáticamente.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── VISTA: INGRESOS ─────────────────────────────────────────────────────────
+function Ingresos({ ingresos, setIngresos, crmData, showMoney }) {
+  const [show,setShow]=useState(false);
+  const [editando,setEditando]=useState(null);
+  const disp=showMoney||fmt$;
+  const [mes,setMes]=useState(monthStr());
+  const [q,setQ]=useState("");
+
+  const lista=useMemo(()=>
+    ingresos.filter(i=>!mes||i.date.startsWith(mes)).filter(i=>!q||i.desc.toLowerCase().includes(q.toLowerCase())||(i.alumno||"").toLowerCase().includes(q.toLowerCase()))
+    .sort((a,b)=>b.date.localeCompare(a.date))
+  ,[ingresos,mes,q]);
+
+  const tots=useMemo(()=>({
+    bruto:lista.reduce((s,i)=>s+i.monto,0),
+    neto:lista.reduce((s,i)=>s+i.neto,0),
+    comm:lista.reduce((s,i)=>s+(i.totalDed||0),0),
+    cash:lista.filter(i=>i.method==="cash").reduce((s,i)=>s+i.monto,0),
+    trf:lista.filter(i=>i.method==="transfer").reduce((s,i)=>s+i.monto,0),
+    card:lista.filter(i=>i.method==="card").reduce((s,i)=>s+i.monto,0),
+  }),[lista]);
+
+  async function guardar(inc){
+    let upd;
+    if(editando){ upd=ingresos.map(i=>i.id===editando.id?{...inc,id:editando.id}:i); setEditando(null); }
+    else { upd=[...ingresos,inc]; }
+    setIngresos(upd); await stor("set","ingresos",upd); setShow(false);
+  }
+  async function del(id){
+    if(!confirm("¿Eliminar este ingreso?")) return;
+    const upd=ingresos.filter(i=>i.id!==id);
+    setIngresos(upd); await stor("set","ingresos",upd);
+  }
+
+  return(
+    <div>
+      {(show||editando)&&<ModalIngreso crmData={crmData} prefill={editando||undefined} onSave={guardar} onClose={()=>{setShow(false);setEditando(null);}}/>}
+      <div className="sec-hdr">
+        <div className="sec-ttl">💰 Ingresos</div>
+        <button className="btn btn-g" onClick={()=>setShow(true)}>+ Registrar Ingreso</button>
+      </div>
+
+      {lista.length>0&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14}}>
+          {[
+            {l:"Total Cobrado",v:fmt$(tots.bruto),c:"var(--tx)"},
+            {l:"Neto en Cuenta",v:fmt$(tots.neto),c:"var(--gr)"},
+            {l:"Comisiones MP",v:fmt$(tots.comm),c:"var(--rd)"},
+            {l:"💵 Efectivo",v:fmt$(tots.cash),c:"var(--tx2)"},
+            {l:"🏦 Transferencia",v:fmt$(tots.trf),c:"var(--ac)"},
+            {l:"💳 Terminal MP",v:fmt$(tots.card),c:"var(--pu)"},
+          ].map(({l,v,c})=>(
+            <div key={l} className="mini-stat"><div className="ms-label">{l}</div><div className="ms-val" style={{color:c}}>{v}</div></div>
+          ))}
+        </div>
+      )}
+
+      <div className="fbar">
+        <input className="finput" type="month" value={mes} onChange={e=>setMes(e.target.value)}/>
+        <input className="finput" type="text" placeholder="🔍 Buscar descripción o alumno..." value={q} onChange={e=>setQ(e.target.value)} style={{flex:1,minWidth:200}}/>
+        {mes&&<button className="btn btn-o btn-sm" onClick={()=>setMes("")}>Todos los meses</button>}
+      </div>
+
+      {lista.length===0?(
+        <div className="empty"><div className="empty-icon">💰</div><div className="empty-ttl">Sin ingresos</div><div className="empty-sub">Registra tu primer ingreso con el botón de arriba</div></div>
+      ):(
+        <div className="card" style={{padding:0}}>
+          <div className="twrap">
+            <table>
+              <thead><tr><th>Fecha</th><th>Descripción</th><th>Alumno</th><th>Categ.</th><th>Método</th><th className="tr">Cobrado</th><th className="tr">Comisión</th><th className="tr">En Cuenta</th><th></th></tr></thead>
+              <tbody>
+                {lista.map(i=>(
+                  <tr key={i.id}>
+                    <td className="mono" style={{fontSize:11}}>{fmtD(i.date)}</td>
+                    <td><div style={{fontWeight:500}}>{i.desc}</div>{i.notas&&<div style={{fontSize:10,color:"var(--tx3)",marginTop:2}}>{i.notas}</div>}</td>
+                    <td style={{color:"var(--tx2)",fontSize:12}}>{i.alumno||"—"}</td>
+                    <td><span className="badge b-gy">{i.cat}</span></td>
+                    <td><span className={`badge ${i.method==="cash"?"b-gr":i.method==="transfer"?"b-ac":"b-pu"}`}>{i.method==="cash"?"💵 Efectivo":i.method==="transfer"?"🏦 Transf.":"💳 Terminal"}</span></td>
+                    <td className="mono tr">{fmt$(i.monto)}</td>
+                    <td className="mono tr" style={{color:i.method==="card"?"var(--rd)":"var(--tx3)"}}>{i.method==="card"?`-${fmt$(i.totalDed)}`:"—"}</td>
+                    <td className="mono tr tg" style={{fontWeight:600}}>{fmt$(i.neto)}</td>
+                    <td style={{whiteSpace:"nowrap"}}><button className="btn btn-o btn-sm" onClick={()=>setEditando(i)} title="Editar">✏️</button>{" "}<button className="btn btn-d btn-sm" onClick={()=>del(i.id)}>🗑</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── VISTA: ALUMNOS CRM ──────────────────────────────────────────────────────
+function AlumnosCRM({ crmData, ingresos, setIngresos }) {
+  const [q, setQ] = useState("");
+  const [showModal, setShowModal] = useState(false);
+  const [prefill, setPrefill] = useState(null);
+  const [filtroCurso, setFiltroCurso] = useState("todos");
+  const cm = monthStr();
+  const cmLabel = new Date().toLocaleDateString("es-MX",{month:"long",year:"numeric"});
+
+  const cursos = useMemo(()=>{
+    if (!crmData?.cursos) return [];
+    return crmData.cursos.map(c=>c.nombre||c.name||"").filter(Boolean);
+  },[crmData]);
+
+  // Agrupar matrículas: un registro por alumno, mostrando todos sus cursos
+  const alumnos = useMemo(()=>{
+    if (!crmData?.matrículas) return [];
+    const map = {};
+    crmData.matrículas.forEach(m=>{
+      if (!map[m.alumno]) map[m.alumno]={ alumno:m.alumno, cursos:[], folios:[], email:m.email||"", titular:m.titular||"" };
+      map[m.alumno].cursos.push(m.curso);
+      map[m.alumno].folios.push(m.folio);
+    });
+    return Object.values(map).sort((a,b)=>a.alumno.localeCompare(b.alumno));
+  },[crmData]);
+
+  // Pagos del mes actual: combina ingresos manuales + pagos del CRM (pagosRegulares)
+  const pagadosMes = useMemo(()=>{
+    const s = new Set();
+    // Pagos manuales en la app contable
+    ingresos.filter(i=>i.date.startsWith(cm)&&i.alumno).forEach(i=>s.add(i.alumno));
+    // Pagos registrados directamente en el CRM (nueva pestaña Pagos Regulares)
+    (crmData?.pagosRegulares||[]).filter(p=>(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm))).forEach(p=>s.add(p.alumnoNombre));
+    return s;
+  },[ingresos,crmData,cm]);
+
+  const ingPorAlumno = useMemo(()=>{
+    const m = {};
+    ingresos.filter(i=>i.alumno).forEach(i=>{
+      if (!m[i.alumno]) m[i.alumno]={ total:0, neto:0, count:0 };
+      m[i.alumno].total += i.monto; m[i.alumno].neto += i.neto; m[i.alumno].count++;
+    });
+    return m;
+  },[ingresos]);
+
+  const filtrados = useMemo(()=>
+    alumnos
+      .filter(a=>!q||a.alumno.toLowerCase().includes(q.toLowerCase()))
+      .filter(a=>filtroCurso==="todos"||a.cursos.includes(filtroCurso))
+  ,[alumnos,q,filtroCurso]);
+
+  const pagados = filtrados.filter(a=>pagadosMes.has(a.alumno)).length;
+  const pendientes = filtrados.filter(a=>!pagadosMes.has(a.alumno)).length;
+
+  async function guardarIngreso(inc){
+    const upd=[...ingresos,inc];
+    setIngresos(upd); await stor("set","ingresos",upd); setShowModal(false); setPrefill(null);
+  }
+
+  function abrirModalPago(a) {
+    // Pre-llenar con datos del primer curso del alumno
+    const folio = a.folios[0];
+    const curso = a.cursos[0];
+    const mat = crmData?.matrículas?.find(m=>m.folio===folio);
+    const costo = crmCostoCurso(crmData, curso);
+    setPrefill({
+      alumno: a.alumno,
+      cursoRef: curso,
+      crmFolio: String(folio),
+      monto: costo > 0 ? costo.toString() : "",
+      desc: `Mensualidad ${cmLabel} — ${curso}`,
+    });
+    setShowModal(true);
+  }
+
+  if (!crmData) return (
+    <div>
+      <div className="sec-ttl" style={{marginBottom:14}}>🔗 Alumnos del CRM</div>
+      <div className="crm-off">
+        <span style={{fontSize:20}}>🔌</span>
+        <div>
+          <div style={{fontWeight:600,color:"var(--tx)"}}>CRM no conectado</div>
+          <div style={{color:"var(--tx2)"}}>Abre el CRM (NOVA IA Academy) en el chat para sincronizar alumnos y cursos automáticamente.</div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return(
+    <div>
+      {showModal&&<ModalIngreso crmData={crmData} prefill={prefill} onSave={guardarIngreso} onClose={()=>{setShowModal(false);setPrefill(null);}}/>}
+
+      <div className="sec-hdr">
+        <div>
+          <div className="sec-ttl">🎓 Alumnos del CRM</div>
+          <div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>Sincronizado desde NOVA IA Academy CRM · {cmLabel}</div>
+        </div>
+      </div>
+
+      {/* Stats rápidos */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
+        {[
+          {l:"Total alumnos",v:alumnos.length,c:"var(--tx)"},
+          {l:"✓ Pagaron este mes",v:pagados,c:"var(--gr)"},
+          {l:"⚠ Sin pago este mes",v:pendientes,c:pendientes>0?"var(--rd)":"var(--tx2)"},
+          {l:"Cursos registrados",v:cursos.length,c:"var(--pu)"},
+        ].map(({l,v,c})=>(
+          <div key={l} className="mini-stat"><div className="ms-label">{l}</div><div className="ms-val" style={{color:c,fontSize:22,fontFamily:"var(--mono)"}}>{v}</div></div>
+        ))}
+      </div>
+
+      {/* Morosos alert */}
+      {pendientes > 0 && (
+        <div className="alert al-rd" style={{marginBottom:14}}>
+          <span style={{fontSize:20}}>⚠️</span>
+          <div>
+            <div style={{fontWeight:700,color:"var(--tx)"}}>
+              {pendientes} alumno(s) sin pago registrado en {cmLabel}
+            </div>
+            <div style={{fontSize:12,opacity:.85,marginTop:2}}>
+              Usa el botón "💰 Registrar pago" para registrar su mensualidad.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filtros */}
+      <div className="fbar" style={{marginBottom:14}}>
+        <input className="finput" type="text" placeholder="🔍 Buscar alumno..." value={q} onChange={e=>setQ(e.target.value)} style={{flex:1}}/>
+        <select className="finput" value={filtroCurso} onChange={e=>setFiltroCurso(e.target.value)}>
+          <option value="todos">Todos los cursos</option>
+          {cursos.map(c=><option key={c}>{c}</option>)}
+        </select>
+        <button className="btn btn-o btn-sm" onClick={()=>{setQ("");setFiltroCurso("todos");}}>Limpiar</button>
+      </div>
+
+      {/* Lista de alumnos */}
+      {filtrados.length === 0 ? (
+        <div className="empty"><div className="empty-icon">🎓</div><div className="empty-ttl">Sin resultados</div></div>
+      ) : (
+        <div className="card" style={{padding:0}}>
+          {filtrados.map(a=>{
+            const pagado = pagadosMes.has(a.alumno);
+            // Check if payment came from CRM pagosRegulares
+            const pagoCRM = (crmData?.pagosRegulares||[]).filter(p=>p.alumnoNombre===a.alumno&&(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm)));
+            const pagoManual = ingresos.filter(i=>i.alumno===a.alumno&&i.date.startsWith(cm));
+            const hist = ingPorAlumno[a.alumno];
+            const histCRM = (crmData?.pagosRegulares||[]).filter(p=>p.alumnoNombre===a.alumno);
+            const totalCRM = histCRM.reduce((s,p)=>s+(p.montoFinal||0),0);
+            return(
+              <div key={a.alumno} className={`alm-row ${pagado?"alm-paid":"alm-due"}`}>
+                <div className="alm-avatar">{a.alumno.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase()}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14}}>{a.alumno}</div>
+                  <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap"}}>
+                    {a.cursos.map(c=><span key={c} className="course-tag">{c}</span>)}
+                  </div>
+                  {a.email&&<div style={{fontSize:11,color:"var(--tx3)",marginTop:3}}>✉ {a.email}</div>}
+                  {(hist||totalCRM>0)&&<div style={{fontSize:11,color:"var(--tx2)",marginTop:3}}>
+                    Histórico: <span style={{fontFamily:"var(--mono)",color:"var(--gr)"}}>{fmt$((hist?.neto||0)+totalCRM)}</span>
+                    {hist?.count>0&&<span style={{color:"var(--tx3)"}}> ({hist.count} manual{histCRM.length>0?`, ${histCRM.length} CRM`:""})</span>}
+                  </div>}
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  {pagado ? (
+                    <div>
+                      {pagoCRM.length>0&&<div style={{marginBottom:4}}><span className="badge b-crm" style={{fontSize:10}}>💳 CRM: {fmt$(pagoCRM.reduce((s,p)=>s+(p.montoFinal||0),0))}</span></div>}
+                      {pagoManual.length>0&&<div style={{marginBottom:4}}><span className="badge b-gr" style={{fontSize:10}}>✓ App: {fmt$(pagoManual.reduce((s,i)=>s+i.neto,0))}</span></div>}
+                      {pagoCRM.length===0&&pagoManual.length===0&&<span className="badge b-gr">✓ Pagado este mes</span>}
+                    </div>
+                  ) : (
+                    <button className="btn btn-g btn-sm" onClick={()=>abrirModalPago(a)}>💰 Registrar pago</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── VISTA: GASTOS FIJOS ─────────────────────────────────────────────────────
+function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos, expenseCats, addExpenseCat, showMoney }) {
+  const cats = expenseCats || DEFAULT_EXPENSE_CATS;
+  const [showForm,setShowForm]=useState(false);
+  const [editando,setEditando]=useState(null);
+  const [pagando,setPagando]=useState(null);
+  const cm=monthStr();
+  const cmLabel=new Date().toLocaleDateString("es-MX",{month:"long",year:"numeric"});
+
+  const conEstado=useMemo(()=>{
+    const hoy=new Date(); const dia=hoy.getDate();
+    return gastosFijos.filter(fe=>fe.active).map(fe=>{
+      const paid=pagosGastos.find(p=>p.gastoId===fe.id&&p.mes===cm);
+      const diff=fe.dia-dia;
+      return{...fe,paid,isOverdue:!paid&&diff<0,isDueSoon:!paid&&diff>=0&&diff<=7,daysLeft:diff};
+    }).sort((a,b)=>{
+      if(a.isOverdue&&!b.isOverdue)return -1; if(!a.isOverdue&&b.isOverdue)return 1;
+      if(a.isDueSoon&&!b.isDueSoon)return -1; if(!a.isDueSoon&&b.isDueSoon)return 1;
+      return a.dia-b.dia;
+    });
+  },[gastosFijos,pagosGastos,cm]);
+
+  const totFijo=gastosFijos.filter(fe=>fe.active).reduce((s,fe)=>s+fe.monto,0);
+  const totPagado=conEstado.filter(e=>e.paid).reduce((s,e)=>s+e.monto,0);
+  const totPend=conEstado.filter(e=>!e.paid).reduce((s,e)=>s+e.monto,0);
+
+  async function handleSave(g){
+    if(g.__addCat){ await addExpenseCat(g.__addCat); return; }
+    let upd;
+    if(editando){ upd=gastosFijos.map(fe=>fe.id===g.id?g:fe); setEditando(null); }
+    else { upd=[...gastosFijos,g]; setShowForm(false); }
+    setGastosFijos(upd); await stor("set","gastosFijos",upd);
+  }
+  async function desactivar(id){
+    if(!confirm("¿Desactivar este gasto fijo?")) return;
+    const upd=gastosFijos.map(fe=>fe.id===id?{...fe,active:false}:fe);
+    setGastosFijos(upd); await stor("set","gastosFijos",upd);
+  }
+  async function reactivar(id){
+    const upd=gastosFijos.map(fe=>fe.id===id?{...fe,active:true}:fe);
+    setGastosFijos(upd); await stor("set","gastosFijos",upd);
+  }
+  async function pagar({fecha,monto,notas},gasto){
+    const pago={id:uid(),gastoId:gasto.id,desc:gasto.desc,monto,fecha,date:fecha,mes:cm,cat:gasto.cat,notas,createdAt:new Date().toISOString()};
+    const upd=[...pagosGastos,pago];
+    setPagosGastos(upd); await stor("set","pagosGastos",upd); setPagando(null);
+  }
+  const disp=showMoney||fmt$;
+
+  return(
+    <div>
+      {(showForm||editando)&&<ModalGastoFijo expenseCats={cats} initial={editando||undefined} onSave={handleSave} onClose={()=>{setShowForm(false);setEditando(null);}}/>}
+      {pagando&&<ModalPagarGasto gasto={pagando} onSave={(d)=>pagar(d,pagando)} onClose={()=>setPagando(null)}/>}
+
+      <div className="sec-hdr">
+        <div className="sec-ttl">📋 Gastos Fijos</div>
+        <button className="btn btn-p" onClick={()=>setShowForm(true)}>+ Agregar Gasto Fijo</button>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:16}}>
+        {[{l:"Total fijo / mes",v:disp(totFijo),c:"var(--tx)"},{l:"Pagado — "+new Date().toLocaleDateString("es-MX",{month:"short"}),v:disp(totPagado),c:"var(--gr)"},{l:"Pendiente de pago",v:disp(totPend),c:totPend>0?"var(--rd)":"var(--tx2)"}].map(({l,v,c})=>(
+          <div key={l} className="mini-stat"><div className="ms-label">{l}</div><div className="ms-val" style={{color:c}}>{v}</div></div>
+        ))}
+      </div>
+
+      <div style={{fontSize:12,color:"var(--tx2)",marginBottom:12}}>Estado — <strong style={{color:"var(--tx)",textTransform:"capitalize"}}>{cmLabel}</strong></div>
+
+      {conEstado.length===0?(
+        <div className="empty"><div className="empty-icon">📋</div><div className="empty-ttl">Sin gastos fijos</div><div className="empty-sub">Agrega renta, servicios, internet, salarios, etc.</div></div>
+      ):(
+        conEstado.map(fe=>(
+          <div key={fe.id} className="exp-item" style={{borderColor:fe.isOverdue?"var(--rd)":fe.isDueSoon?"var(--am)":fe.paid?"rgba(16,201,138,.4)":"var(--br)"}}>
+            <div style={{flex:1,minWidth:180}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                <span style={{fontWeight:600,fontSize:15}}>{fe.desc}</span>
+                {fe.paid?<span className="badge b-gr">✓ Pagado</span>:fe.isOverdue?<span className="badge b-rd">🚨 Vencido</span>:fe.isDueSoon?<span className="badge b-am">⏰ Próximo</span>:<span className="badge b-gy">Pendiente</span>}
+              </div>
+              <div style={{fontSize:11,color:"var(--tx2)",marginTop:5,display:"flex",gap:12,flexWrap:"wrap"}}>
+                <span>📂 {fe.cat}</span>
+                <span>📅 Día {fe.dia} c/mes</span>
+                {fe.paid&&<span style={{color:"var(--gr)"}}>🗓 Pagado el {fmtD(fe.paid.fecha)}</span>}
+                {!fe.paid&&fe.daysLeft===0&&<span style={{color:"var(--am)"}}>¡Vence hoy!</span>}
+                {!fe.paid&&fe.daysLeft>0&&<span style={{color:fe.isDueSoon?"var(--am)":"var(--tx3)"}}>Vence en {fe.daysLeft} día(s)</span>}
+                {!fe.paid&&fe.daysLeft<0&&<span style={{color:"var(--rd)"}}>Vencido hace {Math.abs(fe.daysLeft)} día(s)</span>}
+              </div>
+              {fe.notas&&<div style={{fontSize:10,color:"var(--tx3)",marginTop:4}}>{fe.notas}</div>}
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{textAlign:"right"}}>
+                <div className="mono" style={{fontSize:18,fontWeight:700}}>{fmt$(fe.monto)}</div>
+                <div style={{fontSize:10,color:"var(--tx3)"}}>mensual</div>
+              </div>
+              {!fe.paid&&<button className="btn btn-g btn-sm" onClick={()=>setPagando(fe)}>✓ Pagar</button>}
+              <button className="btn btn-o btn-sm" onClick={()=>setEditando(fe)} title="Editar">✏️</button>
+              <button className="btn btn-d btn-sm" onClick={()=>desactivar(fe.id)} title="Desactivar">🗑</button>
+            </div>
+          </div>
+        ))
+      )}
+
+      {gastosFijos.filter(fe=>!fe.active).length>0&&(
+        <details style={{marginTop:18}}>
+          <summary style={{cursor:"pointer",color:"var(--tx2)",fontSize:12,padding:"6px 0"}}>Gastos desactivados ({gastosFijos.filter(fe=>!fe.active).length})</summary>
+          <div style={{marginTop:8}}>
+            {gastosFijos.filter(fe=>!fe.active).map(fe=>(
+              <div key={fe.id} style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:8,padding:"10px 14px",marginBottom:8,opacity:.5,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontWeight:500}}>{fe.desc}</span>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <span className="mono" style={{fontSize:13}}>{fmt$(fe.monto)}</span>
+                  <button className="btn btn-o btn-sm" onClick={()=>reactivar(fe.id)}>Reactivar</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+// ─── MODAL: CONFIRMAR PAGO DE COMISIÓN ────────────────────────────────────────
+function ModalConfirmarComision({ comision, onSave, onClose }) {
+  const [fecha,setFecha]=useState(comision.fechaPagoDefault);
+  const mesLabel=(ym)=>{
+    const[y,m]=ym.split('-');
+    const n=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    return `${n[parseInt(m)-1]} ${y}`;
+  };
+  return(
+    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:440}}>
+        <div className="mhdr"><div className="mtitle">✅ Confirmar Pago de Comisión</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div style={{background:"var(--s2)",borderRadius:8,padding:"12px 14px",marginBottom:16}}>
+          <div style={{fontSize:15,fontWeight:700}}>{comision.nombreUsuario}</div>
+          <div style={{fontSize:12,color:"var(--tx2)",marginTop:3}}>{comision.count} contrato{comision.count!==1?"s":""} creado{comision.count!==1?"s":""} en {mesLabel(comision.mesGanado)}</div>
+          <div className="mono" style={{fontSize:22,fontWeight:800,marginTop:8,color:"var(--gr)"}}>{fmt$(comision.monto)}</div>
+          <div style={{fontSize:11,color:"var(--tx3)",marginTop:4}}>Folios: {comision.folios.join(", ")}</div>
+        </div>
+        <div className="fgrid">
+          <div className="fgrp" style={{gridColumn:"1/-1"}}>
+            <label className="flbl">Fecha de pago (liquidación)</label>
+            <input className="finp" type="date" value={fecha} onChange={e=>setFecha(e.target.value)}/>
+          </div>
+        </div>
+        <div style={{fontSize:11,color:"var(--tx3)",marginTop:8}}>
+          Este monto se registrará como gasto en <strong>{mesLabel(comision.mesPago)}</strong> (mes en que sale el dinero de la cuenta).
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:18}}>
+          <button className="btn btn-o" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-g" onClick={()=>onSave(fecha)}>✓ Confirmar Pago</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── VISTA: COMISIONES DE EMPLEADOS ──────────────────────────────────────────
+function ComisionesEmpleados({ crmData, pagosGastos, setPagosGastos, showMoney }) {
+  const [pagando,setPagando]=useState(null);
+  const [filtro,setFiltro]=useState("todas"); // todas | pendientes | pagadas
+  const disp=showMoney||fmt$;
+  const mesLabel=(ym)=>{
+    const[y,m]=ym.split('-');
+    const n=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    return `${n[parseInt(m)-1]} ${y}`;
+  };
+
+  const comisiones=useMemo(()=>calcComisiones(crmData),[crmData]);
+
+  function yaPagado(c){
+    return pagosGastos.find(p=>p.cat==="Comisiones"&&p.comisionUsuario===c.usuario&&p.comisionMesGanado===c.mesGanado);
+  }
+
+  async function confirmarPago(c,fecha){
+    const pago={
+      id:uid(), gastoId:null,
+      desc:`Comisión ${c.nombreUsuario} — ${mesLabel(c.mesGanado)} (${c.count} contrato${c.count!==1?"s":""})`,
+      monto:c.monto, fecha, date:fecha, mes:c.mesPago, cat:"Comisiones",
+      notas:`Folios: ${c.folios.join(", ")}`,
+      createdAt:new Date().toISOString(),
+      comisionUsuario:c.usuario, comisionMesGanado:c.mesGanado, comisionFolios:c.folios,
+    };
+    const upd=[...pagosGastos,pago];
+    setPagosGastos(upd); await stor("set","pagosGastos",upd);
+    setPagando(null);
+  }
+
+  if(!crmData?.matrículas){
+    return(
+      <div className="empty">
+        <div className="empty-icon">💼</div>
+        <div className="empty-ttl">Conecta el CRM</div>
+        <div className="empty-sub">Las comisiones se calculan a partir de las matrículas y pagos del CRM.</div>
+      </div>
+    );
+  }
+
+  const conEstado=comisiones.map(c=>({...c,pagado:yaPagado(c)}));
+  const visibles=conEstado.filter(c=>filtro==="todas"||(filtro==="pendientes"&&!c.pagado)||(filtro==="pagadas"&&c.pagado));
+
+  const totalPendiente=conEstado.filter(c=>!c.pagado).reduce((s,c)=>s+c.monto,0);
+  const totalPagadoHist=conEstado.filter(c=>c.pagado).reduce((s,c)=>s+c.monto,0);
+  const nEjecutivos=new Set(conEstado.map(c=>c.usuario)).size;
+  const cm=monthStr();
+  const proximoPago=conEstado.filter(c=>!c.pagado&&c.mesPago<=nextMonth(cm)).reduce((s,c)=>s+c.monto,0);
+
+  return(
+    <div>
+      {pagando&&<ModalConfirmarComision comision={pagando} onSave={(f)=>confirmarPago(pagando,f)} onClose={()=>setPagando(null)}/>}
+
+      <div className="sec-hdr">
+        <div className="sec-ttl">💼 Comisiones de Empleados</div>
+      </div>
+
+      <div style={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:10,padding:"12px 14px",marginBottom:16,fontSize:12,color:"var(--tx2)",lineHeight:1.6}}>
+        💡 Cada <strong style={{color:"var(--tx)"}}>contrato creado y con pago confirmado</strong> genera una comisión única de <strong style={{color:"var(--gr)"}}>{fmt$(COMISION_POR_CONTRATO)}</strong> para el usuario que lo registró.
+        Las comisiones de un mes se liquidan el <strong style={{color:"var(--tx)"}}>día 15 del mes siguiente</strong>, y ese gasto se contabiliza en el mes en que se paga (mes vencido).
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:16}}>
+        <div className="mini-stat"><div className="ms-label">Pendiente de pago</div><div className="ms-val" style={{color:"var(--am)"}}>{disp(totalPendiente)}</div></div>
+        <div className="mini-stat"><div className="ms-label">Próxima liquidación (15 de {mesLabel(nextMonth(cm))})</div><div className="ms-val" style={{color:"var(--rd)"}}>{disp(proximoPago)}</div></div>
+        <div className="mini-stat"><div className="ms-label">Pagado histórico</div><div className="ms-val" style={{color:"var(--gr)"}}>{disp(totalPagadoHist)}</div></div>
+        <div className="mini-stat"><div className="ms-label">Ejecutivos con comisión</div><div className="ms-val">{nEjecutivos}</div></div>
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:14}}>
+        {[["todas","Todas"],["pendientes","Pendientes"],["pagadas","Pagadas"]].map(([v,l])=>(
+          <button key={v} className={`btn btn-sm ${filtro===v?"btn-p":"btn-o"}`} onClick={()=>setFiltro(v)}>{l}</button>
+        ))}
+      </div>
+
+      {visibles.length===0?(
+        <div className="empty"><div className="empty-icon">💼</div><div className="empty-ttl">Sin comisiones {filtro==="pendientes"?"pendientes":filtro==="pagadas"?"pagadas":"registradas"}</div><div className="empty-sub">Aparecerán aquí cuando se creen y confirmen contratos en el CRM.</div></div>
+      ):(
+        visibles.map(c=>(
+          <div key={c.usuario+c.mesGanado} className="exp-item" style={{borderColor:c.pagado?"rgba(16,201,138,.4)":"var(--br)"}}>
+            <div style={{flex:1,minWidth:180}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                <span style={{fontWeight:600,fontSize:15}}>{c.nombreUsuario}</span>
+                {c.pagado?<span className="badge b-gr">✓ Pagado</span>:<span className="badge b-am">⏳ Pendiente</span>}
+              </div>
+              <div style={{fontSize:11,color:"var(--tx2)",marginTop:5,display:"flex",gap:12,flexWrap:"wrap"}}>
+                <span>📅 Contratos de {mesLabel(c.mesGanado)}</span>
+                <span>📄 {c.count} contrato{c.count!==1?"s":""}</span>
+                <span>💵 {fmt$(COMISION_POR_CONTRATO)} c/u</span>
+                {c.pagado
+                  ?<span style={{color:"var(--gr)"}}>🗓 Pagado el {fmtD(c.pagado.fecha)}</span>
+                  :<span style={{color:"var(--am)"}}>🗓 Pagar el 15 de {mesLabel(c.mesPago)}</span>}
+              </div>
+              <details style={{marginTop:6}}>
+                <summary style={{cursor:"pointer",fontSize:10,color:"var(--tx3)"}}>Ver folios ({c.folios.length})</summary>
+                <div style={{fontSize:11,color:"var(--tx2)",marginTop:4}}>{c.folios.map(f=>`#${f}`).join(", ")}</div>
+              </details>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{textAlign:"right"}}>
+                <div className="mono" style={{fontSize:18,fontWeight:700}}>{disp(c.monto)}</div>
+                <div style={{fontSize:10,color:"var(--tx3)"}}>comisión</div>
+              </div>
+              {!c.pagado&&<button className="btn btn-g btn-sm" onClick={()=>setPagando(c)}>✓ Marcar pagado</button>}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+
+// ─── VISTA: HISTORIAL ────────────────────────────────────────────────────────
+function Historial({ ingresos, pagosGastos }) {
+  const [mes,setMes]=useState(monthStr());
+  const [tipo,setTipo]=useState("todo");
+  const [q,setQ]=useState("");
+
+  const all=useMemo(()=>{
+    const inc=ingresos.map(i=>({...i,tipo:"ingreso",fecha:i.date,display:i.monto,netDisplay:i.neto}));
+    const gst=pagosGastos.map(g=>({...g,tipo:"gasto",fecha:g.fecha||g.date,display:-g.monto,netDisplay:-g.monto,cat:g.cat}));
+    return[...inc,...gst]
+      .filter(t=>!mes||t.fecha?.startsWith(mes))
+      .filter(t=>tipo==="todo"||t.tipo===tipo)
+      .filter(t=>!q||t.desc?.toLowerCase().includes(q.toLowerCase())||(t.alumno||"").toLowerCase().includes(q.toLowerCase()))
+      .sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
+  },[ingresos,pagosGastos,mes,tipo,q]);
+
+  const totInc=all.filter(t=>t.tipo==="ingreso").reduce((s,t)=>s+t.neto,0);
+  const totGst=all.filter(t=>t.tipo==="gasto").reduce((s,t)=>s+t.monto,0);
+
+  return(
+    <div>
+      <div className="sec-ttl" style={{marginBottom:14}}>📜 Historial de Transacciones</div>
+      <div className="fbar">
+        <input className="finput" type="month" value={mes} onChange={e=>setMes(e.target.value)}/>
+        <select className="finput" value={tipo} onChange={e=>setTipo(e.target.value)}>
+          <option value="todo">Todos</option><option value="ingreso">Solo Ingresos</option><option value="gasto">Solo Gastos</option>
+        </select>
+        <input className="finput" type="text" placeholder="🔍 Buscar..." value={q} onChange={e=>setQ(e.target.value)} style={{flex:1,minWidth:150}}/>
+        {mes&&<button className="btn btn-o btn-sm" onClick={()=>setMes("")}>Todos los meses</button>}
+      </div>
+
+      {all.length>0&&(
+        <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+          {[{l:"Ingresos netos:",v:fmt$(totInc),c:"var(--gr)"},{l:"Total gastos:",v:fmt$(totGst),c:"var(--rd)"},{l:"Balance:",v:(totInc-totGst>=0?"+":"")+fmt$(totInc-totGst),c:totInc-totGst>=0?"var(--gr)":"var(--rd)"}].map(({l,v,c})=>(
+            <div key={l} style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:8,padding:"8px 14px",fontSize:13}}>
+              <span style={{color:"var(--tx2)"}}>{l} </span><span style={{color:c,fontFamily:"var(--mono)",fontWeight:600}}>{v}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {all.length===0?(
+        <div className="empty"><div className="empty-icon">📜</div><div className="empty-ttl">Sin transacciones</div><div className="empty-sub">No hay registros para los filtros seleccionados</div></div>
+      ):(
+        <div className="card" style={{padding:0}}>
+          <div className="twrap">
+            <table>
+              <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Categoría</th><th className="tr">Importe</th><th className="tr">Neto</th></tr></thead>
+              <tbody>
+                {all.map(t=>(
+                  <tr key={t.id}>
+                    <td className="mono" style={{fontSize:11}}>{fmtD(t.fecha)}</td>
+                    <td><span className={`badge ${t.tipo==="ingreso"?"b-gr":"b-rd"}`}>{t.tipo==="ingreso"?"↑ Ingreso":"↓ Gasto"}</span></td>
+                    <td>
+                      <div style={{fontWeight:500,fontSize:13}}>{t.desc}</div>
+                      {t.alumno&&<div style={{fontSize:10,color:"var(--tx3)"}}>👤 {t.alumno}</div>}
+                      {t.tipo==="ingreso"&&t.method==="card"&&<div style={{fontSize:10,color:"var(--rd)"}}>Comisión MP: -{fmt$(t.totalDed)}</div>}
+                    </td>
+                    <td><span className="badge b-gy">{t.cat}</span></td>
+                    <td className="mono tr" style={{color:t.tipo==="ingreso"?"var(--tx)":"var(--rd)"}}>{t.tipo==="ingreso"?fmt$(t.monto):"-"+fmt$(t.monto)}</td>
+                    <td className="mono tr" style={{color:t.tipo==="ingreso"?"var(--gr)":"var(--rd)",fontWeight:600}}>{t.tipo==="ingreso"?fmt$(t.neto):"-"+fmt$(t.monto)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── VISTA: REPORTES ─────────────────────────────────────────────────────────
+function Reportes({ ingresos, pagosGastos }) {
+  const monthly=useMemo(()=>
+    Array.from({length:12},(_,i)=>{
+      const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-11+i);
+      const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      const inc=ingresos.filter(x=>x.date.startsWith(ym));
+      const exp=pagosGastos.filter(x=>x.mes===ym);
+      const ing=+inc.reduce((s,x)=>s+x.neto,0).toFixed(2);
+      const gst=+exp.reduce((s,x)=>s+x.monto,0).toFixed(2);
+      return{m:d.toLocaleDateString("es-MX",{month:"short",year:"2-digit"}),ing,gst,bal:+(ing-gst).toFixed(2),n:inc.length};
+    })
+  ,[ingresos,pagosGastos]);
+
+  const catInc=useMemo(()=>{const c={};ingresos.forEach(i=>{c[i.cat]=(c[i.cat]||0)+i.monto;});return Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([name,value])=>({name,value:+value.toFixed(2)}));},[ingresos]);
+  const catGst=useMemo(()=>{const c={};pagosGastos.forEach(g=>{c[g.cat]=(c[g.cat]||0)+g.monto;});return Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([name,value])=>({name,value:+value.toFixed(2)}));},[pagosGastos]);
+  const metodos=useMemo(()=>{const m={Efectivo:0,Transferencia:0,"Terminal MP":0};ingresos.forEach(i=>{m[i.method==="cash"?"Efectivo":i.method==="transfer"?"Transferencia":"Terminal MP"]+=i.monto;});return Object.entries(m).filter(([,v])=>v>0).map(([name,value])=>({name,value:+value.toFixed(2)}));},[ingresos]);
+
+  const P1=["#22D4EF","#10C98A","#9B72F8","#F5C147","#EC4899","#6EE7B7"];
+  const P2=["#F46B6B","#FB923C","#F5C147","#34D399","#60A5FA","#A78BFA","#F472B6","#94A3B8"];
+  const totInc=ingresos.reduce((s,i)=>s+i.neto,0);
+  const totGst=pagosGastos.reduce((s,g)=>s+g.monto,0);
+  const totComm=ingresos.filter(i=>i.method==="card").reduce((s,i)=>s+(i.totalDed||0),0);
+  const Tip=({active,payload,label})=>active&&payload?.length?(<div className="ctooltip"><div style={{fontWeight:600,marginBottom:4}}>{label}</div>{payload.map((p,i)=><div key={i} style={{color:p.color}}>{p.name}: {fmt$(p.value)}</div>)}</div>):null;
+
+  return(
+    <div>
+      <div className="sec-ttl" style={{marginBottom:14}}>📊 Reportes y Análisis</div>
+      <div className="sgrid">
+        {[
+          {label:"Ingresos Brutos Histórico",val:fmt$(ingresos.reduce((s,i)=>s+i.monto,0)),sub:"Total cobrado",stripe:"var(--gr)",vcol:"var(--gr)"},
+          {label:"Ingresos Netos Histórico",val:fmt$(totInc),sub:"Lo que llega a tu cuenta",stripe:"var(--ac)",vcol:"var(--ac)"},
+          {label:"Gastos Totales Histórico",val:fmt$(totGst),sub:"Suma de pagos registrados",stripe:"var(--rd)",vcol:"var(--rd)"},
+          {label:"Comisiones Mercado Pago",val:fmt$(totComm),sub:"Total pagado en comisiones",stripe:"var(--am)",vcol:"var(--am)"},
+        ].map(({label,val,sub,stripe,vcol})=>(
+          <div key={label} className="scard" style={{"--stripe":stripe,"--vcol":vcol}}>
+            <div className="slabel">{label}</div>
+            <div className="sval">{val}</div>
+            <div className="ssub">{sub}</div>
+          </div>
+        ))}
+      </div>
+      <div className="card">
+        <div className="ctitle">📈 Balance Mensual (12 meses)</div>
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={monthly} margin={{top:4,right:8,left:0,bottom:0}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--br)"/>
+            <XAxis dataKey="m" tick={{fill:"var(--tx2)",fontSize:10}} axisLine={false} tickLine={false}/>
+            <YAxis tick={{fill:"var(--tx2)",fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/>
+            <Tooltip content={<Tip/>}/>
+            <Bar dataKey="ing" fill="#10C98A" radius={[4,4,0,0]} name="Ingresos netos"/>
+            <Bar dataKey="gst" fill="#F46B6B" radius={[4,4,0,0]} name="Gastos"/>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:14}}>
+        {[
+          {title:"💰 Ingresos por Categoría",data:catInc,colors:P1},
+          {title:"💳 Ingresos por Método de Pago",data:metodos,colors:["#22D4EF","#10C98A","#9B72F8"]},
+          {title:"📋 Gastos por Categoría",data:catGst,colors:P2},
+        ].filter(({data})=>data.length>0).map(({title,data,colors})=>(
+          <div key={title} className="card">
+            <div className="ctitle">{title}</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={78} label={({percent})=>`${(percent*100).toFixed(0)}%`} labelLine={false}>
+                  {data.map((_,i)=><Cell key={i} fill={colors[i%colors.length]}/>)}
+                </Pie>
+                <Tooltip formatter={v=>fmt$(v)}/>
+                <Legend iconSize={9} wrapperStyle={{fontSize:10}}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── VISTA: EXPORTAR ─────────────────────────────────────────────────────────
+function Exportar({ ingresos, pagosGastos, gastosFijos, crmData }) {
+  const [desde,setDesde]=useState("");
+  const [hasta,setHasta]=useState("");
+  const [inclInc,setInclInc]=useState(true);
+  const [inclGst,setInclGst]=useState(true);
+  const [inclCRM,setInclCRM]=useState(true);
+  const [loading,setLoading]=useState(false);
+
+  function exportar(){
+    setLoading(true);
+    setTimeout(()=>{
+      try{
+        const wb=XLSX.utils.book_new();
+        const ok=d=>(!desde||d>=desde)&&(!hasta||d<=hasta);
+
+        if(inclInc){
+          const fi=ingresos.filter(i=>ok(i.date)).sort((a,b)=>a.date.localeCompare(b.date));
+          const ws=XLSX.utils.aoa_to_sheet([
+            ["Fecha","Descripción","Alumno","Categoría","Método de Pago","Monto Cobrado (MXN)","Comisión MP 3.5% (MXN)","IVA Comisión 16% (MXN)","Total Deducido (MXN)","Neto en Cuenta (MXN)","Notas"],
+            ...fi.map(i=>[fmtD(i.date),i.desc,i.alumno||"",i.cat,i.method==="cash"?"Efectivo":i.method==="transfer"?"Transferencia":"Terminal MP",i.monto,i.method==="card"?i.comm:0,i.method==="card"?i.ivaComm:0,i.method==="card"?i.totalDed:0,i.neto,i.notas||""]),
+            [],[" TOTALES","","","","",fi.reduce((s,i)=>s+i.monto,0),fi.reduce((s,i)=>s+(i.comm||0),0),fi.reduce((s,i)=>s+(i.ivaComm||0),0),fi.reduce((s,i)=>s+(i.totalDed||0),0),fi.reduce((s,i)=>s+i.neto,0)],
+          ]);
+          ws["!cols"]=[10,32,22,16,16,14,16,16,14,14,26].map(w=>({wch:w}));
+          XLSX.utils.book_append_sheet(wb,ws,"Ingresos");
+        }
+
+        if(inclGst){
+          const fg=pagosGastos.filter(g=>ok(g.fecha||g.date)).sort((a,b)=>(a.fecha||a.date||"").localeCompare(b.fecha||b.date||""));
+          const ws=XLSX.utils.aoa_to_sheet([
+            ["Fecha Pago","Descripción","Categoría","Mes","Monto Pagado (MXN)","Notas"],
+            ...fg.map(g=>[fmtD(g.fecha||g.date),g.desc,g.cat,g.mes,g.monto,g.notas||""]),
+            [],["TOTALES","","","",fg.reduce((s,g)=>s+g.monto,0)],
+          ]);
+          ws["!cols"]=[10,30,16,10,14,26].map(w=>({wch:w}));
+          XLSX.utils.book_append_sheet(wb,ws,"Gastos");
+
+          const wsFe=XLSX.utils.aoa_to_sheet([
+            ["Descripción","Monto Mensual","Día de Pago","Categoría","Estado","Notas"],
+            ...gastosFijos.map(fe=>[fe.desc,fe.monto,fe.dia,fe.cat,fe.active?"Activo":"Inactivo",fe.notas||""]),
+          ]);
+          wsFe["!cols"]=[30,14,12,16,10,26].map(w=>({wch:w}));
+          XLSX.utils.book_append_sheet(wb,wsFe,"Gastos Fijos Config.");
+        }
+
+        // Resumen
+        const cm=monthStr();
+        const mInc=ingresos.filter(i=>i.date.startsWith(cm));
+        const mGst=pagosGastos.filter(g=>g.mes===cm);
+        const ws=XLSX.utils.aoa_to_sheet([
+          ["RESUMEN CONTABLE — ACADEMIA DE COMPUTACIÓN"],
+          ["Generado el",new Date().toLocaleString("es-MX")],[""],
+          ["═══ MES ACTUAL — "+new Date().toLocaleDateString("es-MX",{month:"long",year:"numeric"}).toUpperCase()+" ═══"],
+          ["Ingresos Brutos del Mes",mInc.reduce((s,i)=>s+i.monto,0)],
+          ["Ingresos Netos (en cuenta)",mInc.reduce((s,i)=>s+i.neto,0)],
+          ["Total Gastos Pagados",mGst.reduce((s,g)=>s+g.monto,0)],
+          ["Balance del Mes",mInc.reduce((s,i)=>s+i.neto,0)-mGst.reduce((s,g)=>s+g.monto,0)],
+          ["Comisiones MP del Mes",mInc.filter(i=>i.method==="card").reduce((s,i)=>s+(i.totalDed||0),0)],
+          [""],
+          ["═══ HISTÓRICO TOTAL ═══"],
+          ["Total Ingresos Brutos",ingresos.reduce((s,i)=>s+i.monto,0)],
+          ["Total Ingresos Netos",ingresos.reduce((s,i)=>s+i.neto,0)],
+          ["Total Gastos Registrados",pagosGastos.reduce((s,g)=>s+g.monto,0)],
+          ["Balance Total",ingresos.reduce((s,i)=>s+i.neto,0)-pagosGastos.reduce((s,g)=>s+g.monto,0)],
+          ["Total Comisiones MP",ingresos.filter(i=>i.method==="card").reduce((s,i)=>s+(i.totalDed||0),0)],
+          [""],
+          ["═══ INGRESOS POR MÉTODO (HISTÓRICO) ═══"],
+          ["Efectivo",ingresos.filter(i=>i.method==="cash").reduce((s,i)=>s+i.monto,0)],
+          ["Transferencia Bancaria",ingresos.filter(i=>i.method==="transfer").reduce((s,i)=>s+i.monto,0)],
+          ["Terminal Mercado Pago",ingresos.filter(i=>i.method==="card").reduce((s,i)=>s+i.monto,0)],
+          [""],
+          ["═══ CONFIGURACIÓN DE COMISIÓN MP ═══"],
+          ["Tasa base","3.50%"],
+          ["IVA sobre comisión","16.00%"],
+          ["Tasa efectiva total","~4.06%"],
+        ]);
+        ws["!cols"]=[34,18].map(w=>({wch:w}));
+        XLSX.utils.book_append_sheet(wb,ws,"Resumen");
+
+        // Hoja CRM — Por alumno
+        if(inclCRM && crmData?.matrículas) {
+          const alumnos = crmAlumnos(crmData);
+          const rows = [["Alumno","Curso(s)","Email","Folio","Total Cobrado (MXN)","Total Neto (MXN)","# Pagos","Pagó este mes"]];
+          const cm = monthStr();
+          const pagadosMes = new Set(ingresos.filter(i=>i.date.startsWith(cm)&&i.alumno).map(i=>i.alumno));
+          alumnos.forEach(a=>{
+            const fi = ingresos.filter(i=>i.alumno===a.alumno);
+            const total = fi.reduce((s,i)=>s+i.monto,0);
+            const neto = fi.reduce((s,i)=>s+i.neto,0);
+            rows.push([
+              a.alumno, a.cursos.join(", "), a.email||"", a.folios.join(", "),
+              total, neto, fi.length, pagadosMes.has(a.alumno)?"Sí":"No"
+            ]);
+          });
+          const wsCrm = XLSX.utils.aoa_to_sheet(rows);
+          wsCrm["!cols"]=[24,28,24,12,16,16,8,12].map(w=>({wch:w}));
+          XLSX.utils.book_append_sheet(wb,wsCrm,"Alumnos CRM");
+        }
+
+        XLSX.writeFile(wb,`Academia_Contabilidad_${todayStr()}.xlsx`);
+      }catch(e){alert("Error al exportar: "+e.message);}
+      setLoading(false);
+    },150);
+  }
+
+  return(
+    <div>
+      <div className="sec-ttl" style={{marginBottom:14}}>📤 Exportar a Excel</div>
+      <div className="card">
+        <div className="ctitle">⚙️ Opciones de Exportación</div>
+        <div className="fgrid" style={{marginBottom:18}}>
+          <div className="fgrp"><label className="flbl">Desde (Fecha)</label><input className="finp" type="date" value={desde} onChange={e=>setDesde(e.target.value)}/></div>
+          <div className="fgrp"><label className="flbl">Hasta (Fecha)</label><input className="finp" type="date" value={hasta} onChange={e=>setHasta(e.target.value)}/></div>
+        </div>
+        <div style={{display:"flex",gap:10,marginBottom:22,flexWrap:"wrap"}}>
+          {[[inclInc,setInclInc,"💰 Incluir Ingresos"],[inclGst,setInclGst,"📋 Incluir Gastos"]].map(([val,setVal,label])=>(
+            <button key={label} className={`btn ${val?"btn-p":"btn-o"}`} onClick={()=>setVal(!val)}>{val?"✓":"○"} {label}</button>
+          ))}
+          {crmData&&<button className={`btn ${inclCRM?"btn-p":"btn-o"}`} onClick={()=>setInclCRM(!inclCRM)}>{inclCRM?"✓":"○"} 🎓 Incluir Alumnos CRM</button>}
+        </div>
+        <div className="alert al-ac" style={{marginBottom:18}}>
+          <span>📄</span>
+          <div>
+            <div style={{fontWeight:600,color:"var(--tx)"}}>El archivo incluirá las siguientes hojas:</div>
+            <div style={{fontSize:12,marginTop:5,lineHeight:1.7}}>
+              {inclInc&&<div>• <strong>Ingresos</strong>: Todas las transacciones con desglose de comisión MP (monto cobrado vs. neto en cuenta)</div>}
+              {inclGst&&<><div>• <strong>Gastos</strong>: Pagos realizados de gastos fijos</div><div>• <strong>Gastos Fijos Config.</strong>: Lista de gastos recurrentes configurados</div></>}
+              {inclCRM&&crmData&&<div>• <strong>Alumnos CRM</strong>: Histórico de pagos por alumno y estado del mes actual</div>}
+              <div>• <strong>Resumen</strong>: Balance general, estadísticas históricas y configuración de comisión MP</div>
+            </div>
+          </div>
+        </div>
+        <button className="btn btn-g" style={{fontSize:14,padding:"11px 28px"}} onClick={exportar} disabled={loading||(!inclInc&&!inclGst&&!(inclCRM&&crmData))}>
+          {loading?"⏳ Generando...":"📥 Descargar Excel (.xlsx)"}
+        </button>
+      </div>
+      <div className="card">
+        <div className="ctitle">📊 Datos disponibles para exportar</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:14}}>
+          {[
+            {l:"Registros de ingresos",v:ingresos.length},
+            {l:"Pagos de gastos",v:pagosGastos.length},
+            {l:"Gastos fijos activos",v:gastosFijos.filter(f=>f.active).length},
+            {l:"Total transacciones",v:ingresos.length+pagosGastos.length},
+            ...(crmData?[{l:"Alumnos del CRM",v:crmAlumnos(crmData).length,crm:true}]:[]),
+          ].map(({l,v,crm})=>(
+            <div key={l} style={{textAlign:"center",padding:16,background:"var(--s2)",borderRadius:8}}>
+              <div style={{fontSize:30,fontWeight:800,fontFamily:"var(--mono)",color:crm?"var(--pu)":"var(--ac)"}}>{v}</div>
+              <div style={{fontSize:11,color:"var(--tx2)",marginTop:4}}>{l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── VISTA: PRONÓSTICO DE INGRESOS ───────────────────────────────────────────
+function Pronostico({ crmData, ingresos, pagosGastos, gastosFijos }) {
+  const [mesSel, setMesSel] = useState(monthStr());
+
+  // Build 13 months: current + 12 future
+  const meses = useMemo(()=>{
+    const arr=[];
+    for(let i=0;i<=12;i++){
+      const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+i);
+      arr.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
+    }
+    return arr;
+  },[]);
+
+  const mesLabel=(ym)=>{
+    const[y,m]=ym.split('-');
+    const n=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    return`${n[parseInt(m)-1]} ${y}`;
+  };
+
+  // Active students in a given month based on CRM course dates
+  const alumnosActivosEnMes = useCallback((ym, mats, cursos)=>{
+    if(!mats||!cursos) return [];
+    const[y,m]=ym.split('-').map(Number);
+    const mesStart=new Date(y,m-1,1);
+    const mesEnd=new Date(y,m,0);
+    return mats.filter(mat=>{
+      const cur=cursos.find(c=>c.nombre===mat.curso);
+      if(!cur) return true; // no date = assume active
+      const fin=cur.fechaFin?new Date(cur.fechaFin+'T00:00:00'):null;
+      const ini=cur.fechaInicio?new Date(cur.fechaInicio+'T00:00:00'):null;
+      if(ini&&ini>mesEnd) return false;
+      if(fin&&fin<mesStart) return false;
+      return true;
+    });
+  },[]);
+
+  const mats = crmData?.matrículas||[];
+  const cursos = crmData?.cursos||[];
+
+  // Income already registered for a month (real)
+  const ingresoReal=(ym)=>{
+    const appInc = ingresos.filter(i=>i.date.startsWith(ym)).reduce((s,i)=>s+i.neto,0);
+    const crmInc = (crmData?.pagosRegulares||[]).filter(p=>(p.fecha?.startsWith(ym)||p.fechaISO?.startsWith(ym))).reduce((s,p)=>s+(p.neto||p.montoFinal||0),0);
+    return appInc+crmInc;
+  };
+
+  // Min projected income = sum of base costs of active students
+  const ingresoProyectado=(ym)=>
+    alumnosActivosEnMes(ym, mats, cursos).reduce((s,mat)=>{
+      const cur=cursos.find(c=>c.nombre===mat.curso);
+      return s+(cur?parseFloat(String(cur.costoBase||'').replace(/[^0-9.]/g,''))||0:0);
+    },0);
+
+  // Fixed expenses for a month
+  const gastosFijosMes=(ym)=>gastosFijos.filter(g=>g.active).reduce((s,g)=>s+g.monto,0);
+
+  // Timeline data
+  const timeline = useMemo(()=>meses.map(ym=>({
+    ym,
+    label:mesLabel(ym),
+    activos:alumnosActivosEnMes(ym,mats,cursos).length,
+    proyectado:ingresoProyectado(ym),
+    real:ingresoReal(ym),
+    gastos:gastosFijosMes(ym),
+    balance:ingresoProyectado(ym)-gastosFijosMes(ym),
+    isPast:ym<monthStr(),
+  })),[meses,mats,cursos,ingresos,crmData,gastosFijos]);
+
+  // Selected month detail
+  const activosSel = alumnosActivosEnMes(mesSel, mats, cursos);
+  const porCurso = useMemo(()=>{
+    const m={};
+    activosSel.forEach(mat=>{
+      if(!m[mat.curso])m[mat.curso]={count:0,costo:0,fin:null};
+      m[mat.curso].count++;
+      const cur=cursos.find(c=>c.nombre===mat.curso);
+      m[mat.curso].costo=cur?parseFloat(String(cur.costoBase||'').replace(/[^0-9.]/g,''))||0:0;
+      m[mat.curso].fin=cur?.fechaFin||null;
+    });
+    return m;
+  },[activosSel,cursos]);
+
+  const totalProy=ingresoProyectado(mesSel);
+  const totalReal=ingresoReal(mesSel);
+  const totalGastos=gastosFijosMes(mesSel);
+  const maxVal=Math.max(...timeline.map(t=>t.proyectado),1);
+  const cm=monthStr();
+
+  if(!crmData) return(
+    <div>
+      <div className="sec-ttl" style={{marginBottom:14}}>📈 Pronóstico de Ingresos</div>
+      <div className="crm-off">
+        <span style={{fontSize:20}}>🔌</span>
+        <div>
+          <div style={{fontWeight:600,color:"var(--tx)"}}>CRM no conectado</div>
+          <div style={{color:"var(--tx2)"}}>El pronóstico requiere los datos del CRM (alumnos, cursos y fechas de inicio/fin).</div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return(
+    <div>
+      <div className="sec-hdr">
+        <div>
+          <div className="sec-ttl">📈 Pronóstico de Ingresos</div>
+          <div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>Proyección basada en alumnos regulares del CRM · {mats.length} matrículas · {cursos.length} cursos</div>
+        </div>
+      </div>
+
+      {/* Stats rápidos del mes actual */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:18}}>
+        {[
+          {l:"Alumnos activos hoy",v:alumnosActivosEnMes(cm,mats,cursos).length,c:"var(--ac)"},
+          {l:"Ingreso mín. este mes",v:fmt$(ingresoProyectado(cm)),c:"var(--gr)",mono:true},
+          {l:"Ya cobrado este mes",v:fmt$(ingresoReal(cm)),c:"var(--gr)",mono:true},
+          {l:"Gastos fijos mes",v:fmt$(totalGastos),c:"var(--rd)",mono:true},
+        ].map(({l,v,c,mono})=>(
+          <div key={l} className="mini-stat">
+            <div className="ms-label">{l}</div>
+            <div className="ms-val" style={{color:c,fontSize:mono?16:22,fontFamily:mono?"var(--mono)":"inherit"}}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Gráfica de barras — 13 meses */}
+      <div className="card" style={{marginBottom:18}}>
+        <div className="ctitle">📊 Proyección de ingresos mínimos — próximos 13 meses</div>
+        <div style={{overflowX:"auto",paddingBottom:4}}>
+          <div style={{display:"flex",gap:5,alignItems:"flex-end",minWidth:600,height:130,padding:"8px 4px 0"}}>
+            {timeline.map(({ym,label,proyectado,real,activos,isPast})=>{
+              const pct=maxVal>0?Math.max(proyectado/maxVal,0.04):0.04;
+              const realPct=maxVal>0?Math.max(real/maxVal,0.04):0;
+              const isCur=ym===cm; const isSel=ym===mesSel;
+              return(
+                <div key={ym} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3,cursor:"pointer"}} onClick={()=>setMesSel(ym)}>
+                  <div style={{fontSize:9,fontFamily:"var(--mono)",color:"var(--tx3)",whiteSpace:"nowrap"}}>{activos}👤</div>
+                  <div style={{width:"100%",position:"relative",height:Math.round(pct*90)+"px"}}>
+                    {/* Projected bar */}
+                    <div style={{position:"absolute",bottom:0,left:0,right:0,height:"100%",background:isSel?"var(--ac)":isCur?"var(--gr)":"var(--s3)",borderRadius:"4px 4px 0 0",opacity:isPast?.5:1}}/>
+                    {/* Real bar (overlay) */}
+                    {real>0&&<div style={{position:"absolute",bottom:0,left:0,right:0,height:Math.round(realPct*90)+"px",background:"rgba(16,201,138,.6)",borderRadius:"4px 4px 0 0",maxHeight:"100%"}}/>}
+                  </div>
+                  <div style={{fontSize:9,color:isSel?"var(--ac)":isCur?"var(--gr)":"var(--tx3)",fontWeight:isSel||isCur?700:400,textAlign:"center",lineHeight:1.2,whiteSpace:"nowrap"}}>{label.split(' ')[0]}<br/>{label.split(' ')[1]}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",gap:14,marginTop:8,fontSize:11,color:"var(--tx3)"}}>
+            <span><span style={{background:"var(--ac)",width:10,height:10,display:"inline-block",borderRadius:2,marginRight:4}}/>Proyectado</span>
+            <span><span style={{background:"rgba(16,201,138,.6)",width:10,height:10,display:"inline-block",borderRadius:2,marginRight:4}}/>Real cobrado</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Selector de mes */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+        <div style={{fontWeight:700,fontSize:14}}>Detalle de:</div>
+        <select className="finput" style={{maxWidth:200,fontWeight:600,color:"var(--ac)"}} value={mesSel} onChange={e=>setMesSel(e.target.value)}>
+          {meses.map(ym=><option key={ym} value={ym}>{mesLabel(ym)}</option>)}
+        </select>
+        <div style={{fontSize:13,color:"var(--tx2)"}}>
+          <strong style={{color:"var(--ac)",fontSize:16}}>{activosSel.length}</strong> alumnos activos ·
+          <strong style={{color:"var(--gr)",fontFamily:"var(--mono)",marginLeft:4}}>{fmt$(totalProy)}</strong> ingreso mínimo ·
+          <strong style={{color:"var(--rd)",fontFamily:"var(--mono)",marginLeft:4}}>-{fmt$(totalGastos)}</strong> gastos fijos ·
+          <strong style={{color:totalProy-totalGastos>=0?"var(--gr)":"var(--rd)",fontFamily:"var(--mono)",marginLeft:4}}>{fmt$(totalProy-totalGastos)}</strong> balance
+        </div>
+      </div>
+
+      {/* Tabla detalle por curso */}
+      {Object.keys(porCurso).length===0?(
+        <div className="empty"><div className="empty-icon">📭</div><div className="empty-ttl">Sin alumnos activos para {mesLabel(mesSel)}</div></div>
+      ):(
+        <div className="card" style={{padding:0}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr style={{background:"var(--s2)"}}>
+                {["Curso","Fin del curso","Alumnos activos","Costo base / mes","Ingreso mínimo"].map(h=>(
+                  <th key={h} style={{padding:"9px 14px",textAlign:h.includes("Ingreso")||h.includes("Costo")||h.includes("Alumnos")?"right":"left",fontSize:11,fontWeight:600,color:"var(--tx2)",textTransform:"uppercase",letterSpacing:".5px",borderBottom:"1px solid var(--br)"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(porCurso).map(([curso,d])=>{
+                const expired=d.fin&&new Date(d.fin+'T00:00:00')<new Date();
+                return(
+                  <tr key={curso} style={{borderBottom:"1px solid var(--br)"}}>
+                    <td style={{padding:"11px 14px",fontWeight:600}}>{curso}</td>
+                    <td style={{padding:"11px 14px",fontSize:12,fontFamily:"var(--mono)",color:expired?"var(--rd)":d.fin?"var(--tx2)":"var(--tx3)"}}>
+                      {d.fin||"∞ Sin fecha"}
+                      {expired&&<span style={{marginLeft:6,fontSize:10,background:"var(--rd)",color:"#fff",borderRadius:4,padding:"1px 5px"}}>VENCIDO</span>}
+                    </td>
+                    <td style={{padding:"11px 14px",textAlign:"right",fontWeight:700}}>{d.count}</td>
+                    <td style={{padding:"11px 14px",textAlign:"right",fontFamily:"var(--mono)",color:"var(--ac)"}}>{fmt$(d.costo)}</td>
+                    <td style={{padding:"11px 14px",textAlign:"right",fontFamily:"var(--mono)",fontWeight:700,color:"var(--gr)"}}>{fmt$(d.costo*d.count)}</td>
+                  </tr>
+                );
+              })}
+              {/* Total row */}
+              <tr style={{background:"var(--s2)",fontWeight:700}}>
+                <td colSpan={2} style={{padding:"11px 14px"}}>TOTAL {mesLabel(mesSel)}</td>
+                <td style={{padding:"11px 14px",textAlign:"right"}}>{activosSel.length}</td>
+                <td/>
+                <td style={{padding:"11px 14px",textAlign:"right",fontFamily:"var(--mono)",color:"var(--gr)",fontSize:15}}>{fmt$(totalProy)}</td>
+              </tr>
+              {/* Gastos fijos row */}
+              {totalGastos>0&&(
+                <tr style={{borderTop:"2px solid var(--br)"}}>
+                  <td colSpan={4} style={{padding:"11px 14px",color:"var(--tx2)"}}>
+                    📋 Gastos fijos mensuales ({gastosFijos.filter(g=>g.active).length} conceptos)
+                  </td>
+                  <td style={{padding:"11px 14px",textAlign:"right",fontFamily:"var(--mono)",color:"var(--rd)",fontWeight:700}}>-{fmt$(totalGastos)}</td>
+                </tr>
+              )}
+              {/* Balance row */}
+              <tr style={{background:totalProy-totalGastos>=0?"rgba(16,201,138,.06)":"rgba(244,107,107,.06)",borderTop:"1px solid var(--br)"}}>
+                <td colSpan={4} style={{padding:"11px 14px",fontWeight:700}}>
+                  {totalProy-totalGastos>=0?"✅":"⚠️"} Balance mínimo estimado
+                </td>
+                <td style={{padding:"11px 14px",textAlign:"right",fontFamily:"var(--mono)",fontWeight:800,fontSize:15,color:totalProy-totalGastos>=0?"var(--gr)":"var(--rd)"}}>
+                  {fmt$(totalProy-totalGastos)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{marginTop:14,fontSize:11,color:"var(--tx3)",lineHeight:1.6}}>
+        ⚠️ <strong>Ingreso mínimo</strong> = suma del costo base de cada alumno activo ese mes, asumiendo pago completo sin descuentos. No incluye promociones ni pagos parciales.
+        Los cursos sin fecha de finalización se consideran activos indefinidamente. Configura las fechas en el CRM → Cursos para mayor precisión.
+      </div>
+    </div>
+  );
+}
+
+// ─── APP PRINCIPAL ───────────────────────────────────────────────────────────
+function App() {
+  const [tab,setTab]=useState("dashboard");
+  const [ingresos,setIngresos]=useState([]);
+  const [gastosFijos,setGastosFijos]=useState([]);
+  const [pagosGastos,setPagosGastos]=useState([]);
+  const [crmData,setCrmData]=useState(null);
+  const [crmSource,setCrmSource]=useState(null);
+  const [loaded,setLoaded]=useState(false);
+  const [showRem,setShowRem]=useState(false);
+  // Custom expense categories
+  const [expenseCats,setExpenseCats]=useState(DEFAULT_EXPENSE_CATS);
+  // Currency
+  const [currency,setCurrency]=useState("MXN");
+  const [usdRate,setUsdRate]=useState(null);
+  const [loadingRate,setLoadingRate]=useState(false);
+
+  useEffect(()=>{
+    let offCont=null, offCrm=null;
+    (async()=>{
+      // Cache local instantánea mientras conecta Firebase
+      try{
+        setIngresos(JSON.parse(localStorage.getItem("acad_v1_ingresos")||"[]"));
+        setGastosFijos(JSON.parse(localStorage.getItem("acad_v1_gastosFijos")||"[]"));
+        setPagosGastos(JSON.parse(localStorage.getItem("acad_v1_pagosGastos")||"[]"));
+        const cats=JSON.parse(localStorage.getItem("acad_v1_expenseCats")||"null");
+        if(cats&&cats.length) setExpenseCats(cats);
+      }catch{}
+
+      const ok=await initFirebaseAuth();
+      if(ok&&_fbDb){
+        offCont=(snap)=>{
+          const d=snap.val()||{};
+          setIngresos(d.ingresos||[]);
+          setGastosFijos(d.gastosFijos||[]);
+          setPagosGastos(d.pagosGastos||[]);
+          if(d.expenseCats&&d.expenseCats.length) setExpenseCats(d.expenseCats);
+          try{
+            localStorage.setItem("acad_v1_ingresos",JSON.stringify(d.ingresos||[]));
+            localStorage.setItem("acad_v1_gastosFijos",JSON.stringify(d.gastosFijos||[]));
+            localStorage.setItem("acad_v1_pagosGastos",JSON.stringify(d.pagosGastos||[]));
+            if(d.expenseCats) localStorage.setItem("acad_v1_expenseCats",JSON.stringify(d.expenseCats));
+          }catch{}
+          setLoaded(true);
+        };
+        _fbDb.ref('nova_contabilidad').on('value',offCont);
+
+        offCrm=(snap)=>{
+          const d=snap.val();
+          if(d?.matrículas){ setCrmData({...d,_source:'firebase'}); setCrmSource('firebase'); }
+          else { setCrmData(null); setCrmSource(null); }
+        };
+        _fbDb.ref('nova_crm').on('value',offCrm);
+      } else {
+        setLoaded(true);
+      }
+    })();
+    return ()=>{
+      if(_fbDb&&offCont) _fbDb.ref('nova_contabilidad').off('value',offCont);
+      if(_fbDb&&offCrm) _fbDb.ref('nova_crm').off('value',offCrm);
+    };
+  },[]);
+
+  async function fetchUSDRate(){
+    setLoadingRate(true);
+    try{
+      const r=await fetch("https://open.er-api.com/v6/latest/USD");
+      const d=await r.json();
+      if(d.rates?.MXN) setUsdRate(d.rates.MXN);
+    }catch(e){}
+    setLoadingRate(false);
+  }
+
+  function toggleCurrency(){
+    const next=currency==="MXN"?"USD":"MXN";
+    setCurrency(next);
+    if(next==="USD"&&!usdRate) fetchUSDRate();
+  }
+
+  // Money display helper that respects current currency
+  const showMoney=(mxn)=>currency==="USD"&&usdRate?`$${((mxn||0)/usdRate).toFixed(2)} USD`:fmt$(mxn);
+
+  async function addExpenseCat(name){
+    const upd=[...expenseCats.filter(c=>c!==name),name];
+    setExpenseCats(upd);
+    await stor("set","expenseCats",upd);
+  }
+
+  async function refrescarCRM(){
+    setCrmSource(null);
+    const c=await loadCRM();
+    setCrmData(c||null);
+    setCrmSource(c?._source||null);
+  }
+
+  const upcoming=useMemo(()=>{
+    if(!loaded) return [];
+    const hoy=new Date(); const d=hoy.getDate(); const cm=monthStr();
+    return gastosFijos.filter(fe=>fe.active).map(fe=>{
+      const paid=pagosGastos.some(p=>p.gastoId===fe.id&&p.mes===cm);
+      if(paid) return null;
+      const diff=fe.dia-d;
+      return {...fe,daysUntilDue:diff,isOverdue:diff<0,isDueSoon:diff>=0&&diff<=7};
+    }).filter(Boolean).filter(fe=>fe.isOverdue||fe.isDueSoon).sort((a,b)=>a.daysUntilDue-b.daysUntilDue);
+  },[gastosFijos,pagosGastos,loaded]);
+
+  useEffect(()=>{if(loaded&&upcoming.length>0) setShowRem(true);},[loaded,upcoming.length]);
+
+  const TABS=[
+    {id:"dashboard",icon:"🏠",label:"Inicio"},
+    {id:"ingresos",icon:"💰",label:"Ingresos"},
+    {id:"alumnos",icon:"🎓",label:crmData?"Alumnos CRM":"Alumnos",crm:true},
+    {id:"pronostico",icon:"📈",label:crmData?"Pronóstico":"Pronóstico",crm:true},
+    {id:"gastos",icon:"📋",label:"Gastos Fijos"},
+    {id:"comisiones",icon:"💼",label:"Comisiones",crm:true},
+    {id:"historial",icon:"📜",label:"Historial"},
+    {id:"reportes",icon:"📊",label:"Reportes"},
+    {id:"exportar",icon:"📤",label:"Exportar"},
+  ];
+
+  if(!loaded) return(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--bg)",fontFamily:"var(--sans)",color:"var(--tx2)"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:40,marginBottom:10,animation:"spin 1s linear infinite"}}>⚡</div>
+        <div>Cargando tu contabilidad...</div>
+      </div>
+    </div>
+  );
+
+  return(
+    <>
+      <style dangerouslySetInnerHTML={{__html: CSS}} />
+      <div className="app">
+        {showRem&&upcoming.length>0&&<ModalRecordatorios pagos={upcoming} onClose={()=>setShowRem(false)}/>}
+
+        <div className="hdr">
+          <div className="hdr-logo">🎓</div>
+          <div style={{flex:1}}>
+            <div className="hdr-title">Academia de Computación</div>
+            <div className="hdr-sub">{new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div>
+          </div>
+          {crmData&&(
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span className="badge b-crm" style={{fontSize:10,padding:"3px 8px"}}>
+                {crmSource==="firebase"?"☁️ Firebase — Tiempo real":crmSource==="claude"?"🔵 Claude.ai Storage":"💾 Local"}
+              </span>
+              <button onClick={refrescarCRM} title="Actualizar datos del CRM" style={{background:"none",border:"none",cursor:"pointer",color:"var(--tx3)",fontSize:16,padding:"2px 4px",lineHeight:1}} >⟳</button>
+            </div>
+          )}
+          {!crmData&&loaded&&(
+            <button onClick={refrescarCRM} className="btn btn-o btn-sm" style={{fontSize:11}}>🔌 Conectar CRM</button>
+          )}
+          <button onClick={toggleCurrency} title={currency==="MXN"?"Ver en USD":"Ver en MXN"} className="btn btn-o btn-sm" style={{fontSize:11,minWidth:60,fontFamily:"var(--mono)",fontWeight:700,color:currency==="USD"?"var(--am)":"var(--tx2)"}}>
+            {loadingRate?"⏳":currency==="MXN"?"🇲🇽 MXN":"🇺🇸 USD"}
+          </button>
+          {currency==="USD"&&usdRate&&<div style={{fontSize:10,color:"var(--tx3)",whiteSpace:"nowrap"}}>1 USD = {fmt$(usdRate)}</div>}
+          {upcoming.length>0&&(
+            <button className={`btn btn-sm ${upcoming.some(p=>p.isOverdue)?"btn-d":"btn-am"}`} onClick={()=>setShowRem(true)}>
+              {upcoming.some(p=>p.isOverdue)?"🚨":"⏰"} {upcoming.length} pendiente(s)
+            </button>
+          )}
+        </div>
+
+        <nav className="nav">
+          {TABS.map(t=>(
+            <button key={t.id} className={`ntab ${tab===t.id?"active":""}`} onClick={()=>setTab(t.id)} style={t.crm&&crmData?{color:tab===t.id?"var(--pu)":"var(--tx2)"}:{}}>
+              {t.icon} {t.label}
+              {t.crm&&crmData&&tab!==t.id&&(()=>{
+                const cm=monthStr();
+                const pag=new Set([
+                  ...ingresos.filter(i=>i.date.startsWith(cm)&&i.alumno).map(i=>i.alumno),
+                  ...(crmData.pagosRegulares||[]).filter(p=>(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm))).map(p=>p.alumnoNombre)
+                ]);
+                const mor=crmAlumnos(crmData).filter(a=>!pag.has(a.alumno)).length;
+                return mor>0?<span style={{background:"var(--rd)",color:"#fff",borderRadius:10,fontSize:9,padding:"1px 5px",marginLeft:4}}>{mor}</span>:null;
+              })()}
+            </button>
+          ))}
+        </nav>
+
+        <div className="cnt">
+          {tab==="dashboard"&&<Dashboard ingresos={ingresos} gastosFijos={gastosFijos} pagosGastos={pagosGastos} upcoming={upcoming} setTab={setTab} crmData={crmData} crmSource={crmSource} refrescarCRM={refrescarCRM}/>}
+          {tab==="ingresos"&&<Ingresos ingresos={ingresos} setIngresos={setIngresos} crmData={crmData} showMoney={showMoney}/>}
+          {tab==="alumnos"&&<AlumnosCRM crmData={crmData} ingresos={ingresos} setIngresos={setIngresos}/>}
+          {tab==="pronostico"&&<Pronostico crmData={crmData} ingresos={ingresos} pagosGastos={pagosGastos} gastosFijos={gastosFijos}/>}
+          {tab==="gastos"&&<GastosFijos gastosFijos={gastosFijos} setGastosFijos={setGastosFijos} pagosGastos={pagosGastos} setPagosGastos={setPagosGastos} expenseCats={expenseCats} addExpenseCat={addExpenseCat} showMoney={showMoney}/>}
+          {tab==="comisiones"&&<ComisionesEmpleados crmData={crmData} pagosGastos={pagosGastos} setPagosGastos={setPagosGastos} showMoney={showMoney}/>}
+          {tab==="historial"&&<Historial ingresos={ingresos} pagosGastos={pagosGastos}/>}
+          {tab==="reportes"&&<Reportes ingresos={ingresos} pagosGastos={pagosGastos}/>}
+          {tab==="exportar"&&<Exportar ingresos={ingresos} pagosGastos={pagosGastos} gastosFijos={gastosFijos} crmData={crmData}/>}
+        </div>
+      </div>
+    </>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

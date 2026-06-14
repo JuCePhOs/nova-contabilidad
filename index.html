@@ -187,11 +187,12 @@ function calcComisiones(crmData){
   };
   const grupos={};
   crmData.matrículas.forEach(m=>{
-    if(!m.fechaISO||!m.createdBy) return;
+    const fechaRef = m.fechaISO || m.createdAt;
+    if(!fechaRef||!m.createdBy) return;
     // "Pagado y confirmado": existe al menos un pago registrado para este folio
     const pagado=pagosReg.some(p=>String(p.crmFolio)===String(m.folio));
     if(!pagado) return;
-    const mesGanado=m.fechaISO.slice(0,7);
+    const mesGanado=fechaRef.slice(0,7);
     const key=m.createdBy+"|"+mesGanado;
     if(!grupos[key]) grupos[key]={usuario:m.createdBy,nombreUsuario:nombreDe(m.createdBy),mesGanado,folios:[]};
     grupos[key].folios.push(m.folio);
@@ -1073,10 +1074,12 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
           {filtrados.map(a=>{
             const pagado = pagadosMes.has(a.alumno);
             // Check if payment came from CRM pagosRegulares
-            const pagoCRM = (crmData?.pagosRegulares||[]).filter(p=>p.alumnoNombre===a.alumno&&(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm)));
+            const procesados = new Set(ingresos.filter(i=>i.crmFolio).map(i=>String(i.crmFolio)));
+            const pagoCRM = (crmData?.pagosRegulares||[]).filter(p=>p.alumnoNombre===a.alumno&&(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm))&&!procesados.has(String(p.crmFolio)));
             const pagoManual = ingresos.filter(i=>i.alumno===a.alumno&&i.date.startsWith(cm));
             const hist = ingPorAlumno[a.alumno];
-            const histCRM = (crmData?.pagosRegulares||[]).filter(p=>p.alumnoNombre===a.alumno);
+            // Histórico CRM excluye pagos ya "procesados" (convertidos a ingreso) para no contarlos doble
+            const histCRM = (crmData?.pagosRegulares||[]).filter(p=>p.alumnoNombre===a.alumno&&!procesados.has(String(p.crmFolio)));
             const totalCRM = histCRM.reduce((s,p)=>s+(p.montoFinal||0),0);
             return(
               <div key={a.alumno} className={`alm-row ${pagado?"alm-paid":"alm-due"}`}>

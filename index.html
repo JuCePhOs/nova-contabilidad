@@ -189,8 +189,10 @@ function calcComisiones(crmData){
   crmData.matrículas.forEach(m=>{
     const fechaRef = m.fechaISO || m.createdAt;
     if(!fechaRef||!m.createdBy) return;
-    // "Pagado y confirmado": existe al menos un pago registrado para este folio
-    const pagado=pagosReg.some(p=>String(p.crmFolio)===String(m.folio));
+    // "Pagado y confirmado": existe un pago para este folio, o para el folio representante
+    // del paquete al que pertenece este contrato (1 pago puede cubrir varios contratos/grupos)
+    const repFolio = (m.paqueteFolios&&m.paqueteFolios[0]) ?? m.folio;
+    const pagado=pagosReg.some(p=>String(p.crmFolio)===String(m.folio)||String(p.crmFolio)===String(repFolio));
     if(!pagado) return;
     const mesGanado=fechaRef.slice(0,7);
     const key=m.createdBy+"|"+mesGanado;
@@ -784,7 +786,8 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
         ]);
         const morosos = alumnos.filter(a=>!pagadosMes.has(a.alumno));
         const cursoCount = (crmData.cursos||[]).length;
-        const ingresoCRM = (crmData.pagosRegulares||[]).filter(p=>(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm))).reduce((s,p)=>s+(p.montoFinal||0),0);
+        const procesadosCRM = new Set(ingresos.filter(i=>i.crmFolio).map(i=>String(i.crmFolio)));
+  const ingresoCRM = (crmData.pagosRegulares||[]).filter(p=>(p.fecha?.startsWith(cm)||p.fechaISO?.startsWith(cm))&&!procesadosCRM.has(String(p.crmFolio))).reduce((s,p)=>s+(p.montoFinal||0),0);
         return (
           <div className="crm-banner" style={{marginTop:14,flexDirection:"column",alignItems:"flex-start",gap:10}}>
             <div style={{display:"flex",alignItems:"center",gap:10,width:"100%"}}>

@@ -646,9 +646,22 @@ function MiniPieChart({ data, colors, height=200 }){
 }
 
 // ─── VISTA: DASHBOARD ────────────────────────────────────────────────────────
-function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmData, crmSource, refrescarCRM }) {
+function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport }) {
   const cm=monthStr();
   const cmLabel=new Date().toLocaleDateString("es-MX",{month:"long",year:"numeric"});
+  const [importText,setImportText]=useState("");
+  const [importMsg,setImportMsg]=useState(null);
+  const isEmpty = ingresos.length===0 && gastosFijos.length===0 && pagosGastos.length===0;
+  async function handleImport(){
+    try{
+      const data=JSON.parse(importText);
+      const msg=await onImport(data);
+      setImportMsg({ok:true,text:msg});
+      setImportText("");
+    }catch(e){
+      setImportMsg({ok:false,text:"⚠ "+e.message});
+    }
+  }
 
   const incMes   = ingresos.filter(i=>i.date.startsWith(cm));
   const gastMes  = pagosGastos.filter(g=>g.mes===cm);
@@ -695,6 +708,19 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
       )}
 
       <div style={{fontSize:12,color:"var(--tx2)",marginBottom:14,textTransform:"capitalize"}}>📅 Resumen de {cmLabel}</div>
+
+      {isEmpty && (
+        <div className="card" style={{border:"1px dashed var(--ac)",marginBottom:14}}>
+          <div className="ctitle">🔄 Importar respaldo desde Claude</div>
+          <div style={{fontSize:12,color:"var(--tx2)",marginBottom:10,lineHeight:1.5}}>
+            Si ya usaste esta app dentro de Claude, abre ahí la herramienta de exportación, copia el texto y pégalo aquí. Esta tarjeta desaparece sola una vez que tengas datos.
+          </div>
+          <textarea value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Pega aquí el JSON exportado…"
+            style={{width:"100%",minHeight:90,fontFamily:"monospace",fontSize:11,background:"var(--bg)",color:"var(--ac)",border:"1px solid var(--br)",borderRadius:8,padding:10,resize:"vertical"}}/>
+          <button className="btn btn-p btn-sm" style={{marginTop:8}} onClick={handleImport} disabled={!importText.trim()}>Importar</button>
+          {importMsg && <div className={`alert ${importMsg.ok?"al-gr":"al-rd"}`} style={{marginTop:8}}><span>{importMsg.ok?"✅":"⚠️"}</span><div>{importMsg.text}</div></div>}
+        </div>
+      )}
 
       <div className="sgrid">
         {[
@@ -1956,6 +1982,24 @@ function App() {
     await stor("set","expenseCats",upd);
   }
 
+  async function onImport(data){
+    if(!data || typeof data!=="object") throw new Error("Formato no reconocido.");
+    const MAP={ingresos:"ingresos",gastosFijos:"gastos fijos",pagosGastos:"pagos registrados",expenseCats:"categorías"};
+    const applied=[];
+    for(const k of Object.keys(MAP)){
+      if(data[k]!=null){
+        if(k==="ingresos") setIngresos(data[k]);
+        else if(k==="gastosFijos") setGastosFijos(data[k]);
+        else if(k==="pagosGastos") setPagosGastos(data[k]);
+        else if(k==="expenseCats" && Array.isArray(data[k]) && data[k].length) setExpenseCats(data[k]);
+        await stor("set",k,data[k]);
+        applied.push(MAP[k]);
+      }
+    }
+    if(applied.length===0) throw new Error("El JSON no contiene datos reconocibles (ingresos, gastosFijos, pagosGastos, expenseCats).");
+    return `Importado: ${applied.join(", ")}.`;
+  }
+
   async function refrescarCRM(){
     setCrmSource(null);
     const c=await loadCRM();
@@ -2049,7 +2093,7 @@ function App() {
         </nav>
 
         <div className="cnt">
-          {tab==="dashboard"&&<Dashboard ingresos={ingresos} gastosFijos={gastosFijos} pagosGastos={pagosGastos} upcoming={upcoming} setTab={setTab} crmData={crmData} crmSource={crmSource} refrescarCRM={refrescarCRM}/>}
+          {tab==="dashboard"&&<Dashboard ingresos={ingresos} gastosFijos={gastosFijos} pagosGastos={pagosGastos} upcoming={upcoming} setTab={setTab} crmData={crmData} crmSource={crmSource} refrescarCRM={refrescarCRM} onImport={onImport}/>}
           {tab==="ingresos"&&<Ingresos ingresos={ingresos} setIngresos={setIngresos} crmData={crmData} showMoney={showMoney}/>}
           {tab==="alumnos"&&<AlumnosCRM crmData={crmData} ingresos={ingresos} setIngresos={setIngresos}/>}
           {tab==="pronostico"&&<Pronostico crmData={crmData} ingresos={ingresos} pagosGastos={pagosGastos} gastosFijos={gastosFijos}/>}

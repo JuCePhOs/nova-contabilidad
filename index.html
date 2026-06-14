@@ -988,6 +988,22 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
     setShowModal(true);
   }
 
+  function procesarPagoCRM(a, pago) {
+    // Un pago ya existe en el CRM (pagosRegulares) pero aún no se registró en la contabilidad.
+    // Prellenamos con los datos reales del pago para que solo falte elegir el método (efectivo/transferencia/MP).
+    const curso = pago.curso || a.cursos[0];
+    const fecha = (pago.fecha || pago.fechaISO || todayStr()).slice(0,10);
+    setPrefill({
+      alumno: a.alumno,
+      cursoRef: curso,
+      crmFolio: String(pago.crmFolio || a.folios[0] || ""),
+      monto: String(pago.montoFinal || pago.monto || ""),
+      date: fecha,
+      desc: `Mensualidad ${cmLabel} — ${curso}`,
+    });
+    setShowModal(true);
+  }
+
   if (!crmData) return (
     <div>
       <div className="sec-ttl" style={{marginBottom:14}}>🔗 Alumnos del CRM</div>
@@ -1079,7 +1095,7 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
                 <div style={{textAlign:"right",flexShrink:0}}>
                   {pagado ? (
                     <div>
-                      {pagoCRM.length>0&&<div style={{marginBottom:4}}><span className="badge b-crm" style={{fontSize:10}}>💳 CRM: {fmt$(pagoCRM.reduce((s,p)=>s+(p.montoFinal||0),0))}</span></div>}
+                      {pagoCRM.length>0&&<div style={{marginBottom:4,display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end"}}><span className="badge b-crm" style={{fontSize:10}}>💳 CRM: {fmt$(pagoCRM.reduce((s,p)=>s+(p.montoFinal||0),0))}</span>{pagoManual.length===0&&<button className="btn btn-o btn-sm" style={{fontSize:10,padding:"2px 6px"}} onClick={()=>procesarPagoCRM(a,pagoCRM[0])} title="Registrar este cobro en la contabilidad (elegir método de pago)">→ Contabilidad</button>}</div>}
                       {pagoManual.length>0&&<div style={{marginBottom:4}}><span className="badge b-gr" style={{fontSize:10}}>✓ App: {fmt$(pagoManual.reduce((s,i)=>s+i.neto,0))}</span></div>}
                       {pagoCRM.length===0&&pagoManual.length===0&&<span className="badge b-gr">✓ Pagado este mes</span>}
                     </div>

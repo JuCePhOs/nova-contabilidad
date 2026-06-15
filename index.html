@@ -63,6 +63,7 @@
 </style>
 </head>
 <body>
+<div style="background:#FFD60A;color:#000;text-align:center;font-weight:800;font-size:13px;padding:7px 0;letter-spacing:1px">⚡ BUILD 2026-06-14 · s8 ⚡</div>
 <div id="root"><div id="boot">⚡ Cargando…</div></div>
 
 <script type="text/babel" data-presets="react">
@@ -207,6 +208,29 @@ function pagoDeOcurrencia(fe, fechaISO, pagosGastos){
     return pagosGastos.find(p=>p.gastoId===fe.id&&p.ocurrencia===fechaISO);
   }
   return pagosGastos.find(p=>p.gastoId===fe.id&&p.mes===fechaISO.slice(0,7));
+}
+
+// ─── Pago a instructores: horas finalizadas este mes × tarifa/hora ────────────
+// Misma lógica que horasImpartidas() en el CRM (pestaña Maestros), aplicada
+// sobre crmData.instructores / crmData.sesionesClase para que el monto a pagar
+// se calcule solo, sin captura manual.
+function calcPagosInstructores(crmData){
+  const instructores = crmData?.instructores||[];
+  const sesiones = crmData?.sesionesClase||[];
+  const cm = monthStr();
+  return instructores.filter(p=>p.activo!==false).map(p=>{
+    let horas=0;
+    sesiones.forEach(s=>{
+      if(s.mes!==cm) return;
+      if(s.instructorId===p.id&&s.estadoP==='finalizada') horas+=(s.horasInstructor||0);
+      if(s.asistenteId===p.id&&s.estadoA==='finalizada') horas+=(s.horasAsistente||0);
+      if(s.estado==='finalizada'&&!s.estadoP&&!s.estadoA){
+        if(s.instructorId===p.id) horas+=(s.horasInstructor||0);
+        if(s.asistenteId===p.id) horas+=(s.horasAsistente||0);
+      }
+    });
+    return {id:p.id, nombre:p.nombre, horas:+horas.toFixed(2), tarifaHora:p.tarifaHora||0, monto:+(horas*(p.tarifaHora||0)).toFixed(2), mes:cm};
+  }).filter(r=>r.monto>0);
 }
 
 function calcComisiones(crmData){
@@ -386,6 +410,9 @@ td{padding:11px 13px;color:var(--tx);vertical-align:middle}
 function ModalRecordatorios({ pagos, onClose }) {
   const vencidos  = pagos.filter(p => p.isOverdue);
   const proximos  = pagos.filter(p => !p.isOverdue);
+  const fechaLbl=(p)=>(p.frecuencia||"mensual")==="semanal"
+    ? `${DIAS_SEMANA[new Date(p._fecha+'T00:00:00').getDay()]} ${fmtD(p._fecha)}`
+    : `Día ${p.dia} de cada mes`;
   return (
     <div className="moverlay" onClick={e => e.target===e.currentTarget && onClose()}>
       <div className="modal" style={{maxWidth:520}}>
@@ -402,8 +429,8 @@ function ModalRecordatorios({ pagos, onClose }) {
           <div style={{fontSize:11,fontWeight:700,color:"var(--rd)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8}}>🚨 Vencidos</div>
           {vencidos.map(p=>(
             <div key={p.id} style={{background:"var(--rd2)",border:"1px solid rgba(244,107,107,.4)",borderRadius:8,padding:"12px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
-              <div><div style={{fontWeight:600,fontSize:14}}>{p.description}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{p.category} · Día {p.dueDay}</div></div>
-              <div style={{textAlign:"right"}}><div className="mono" style={{color:"var(--rd)",fontWeight:700}}>{fmt$(p.amount)}</div><div style={{fontSize:11,color:"var(--rd)",marginTop:2}}>{Math.abs(p.daysUntilDue)} día(s) vencido</div></div>
+              <div><div style={{fontWeight:600,fontSize:14}}>{p.desc}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{p.cat} · {fechaLbl(p)}</div></div>
+              <div style={{textAlign:"right"}}><div className="mono" style={{color:"var(--rd)",fontWeight:700}}>{fmt$(p.monto)}</div><div style={{fontSize:11,color:"var(--rd)",marginTop:2}}>{Math.abs(p.daysUntilDue)} día(s) vencido</div></div>
             </div>
           ))}
         </>}
@@ -411,8 +438,8 @@ function ModalRecordatorios({ pagos, onClose }) {
           <div style={{fontSize:11,fontWeight:700,color:"var(--am)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8}}>📅 Esta semana</div>
           {proximos.map(p=>(
             <div key={p.id} style={{background:"var(--am2)",border:"1px solid rgba(245,193,71,.4)",borderRadius:8,padding:"12px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
-              <div><div style={{fontWeight:600,fontSize:14}}>{p.description}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{p.category} · Día {p.dueDay} de cada mes</div></div>
-              <div style={{textAlign:"right"}}><div className="mono" style={{fontWeight:700}}>{fmt$(p.amount)}</div><div style={{fontSize:11,color:"var(--am)",marginTop:2}}>{p.daysUntilDue===0?"¡Hoy!":p.daysUntilDue===1?"Mañana":`En ${p.daysUntilDue} días`}</div></div>
+              <div><div style={{fontWeight:600,fontSize:14}}>{p.desc}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{p.cat} · {fechaLbl(p)}</div></div>
+              <div style={{textAlign:"right"}}><div className="mono" style={{fontWeight:700}}>{fmt$(p.monto)}</div><div style={{fontSize:11,color:"var(--am)",marginTop:2}}>{p.daysUntilDue===0?"¡Hoy!":p.daysUntilDue===1?"Mañana":`En ${p.daysUntilDue} días`}</div></div>
             </div>
           ))}
         </div>}
@@ -787,6 +814,21 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
             <div>
               <div style={{fontWeight:700,color:"var(--tx)"}}>Comisiones por pagar: {fmt$(total)}</div>
               <div style={{fontSize:12,marginTop:2,opacity:.85}}>Se liquidan el 15 de {meses[parseInt(mm)-1]} {yy} · Clic para ir a Comisiones</div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {(()=>{
+        const pendI=calcPagosInstructores(crmData).filter(r=>!pagosGastos.some(p=>p.cat==="Pago Instructores"&&p.instructorId===r.id&&p.mes===r.mes));
+        const totalI=pendI.reduce((s,r)=>s+r.monto,0);
+        if(totalI<=0) return null;
+        return(
+          <div className="alert al-ac" style={{cursor:"pointer"}} onClick={()=>setTab("comisiones")}>
+            <span style={{fontSize:20}}>👨‍🏫</span>
+            <div>
+              <div style={{fontWeight:700,color:"var(--tx)"}}>Pago a instructores por hacer: {fmt$(totalI)}</div>
+              <div style={{fontSize:12,marginTop:2,opacity:.85}}>{pendI.length} instructor{pendI.length!==1?"es":""} con horas finalizadas este mes · Clic para ver detalle</div>
             </div>
           </div>
         );
@@ -1365,9 +1407,37 @@ function ModalConfirmarComision({ comision, onSave, onClose }) {
   );
 }
 
+// ─── MODAL: CONFIRMAR PAGO A INSTRUCTOR ───────────────────────────────────────
+function ModalConfirmarPagoInstructor({ pago, onSave, onClose }) {
+  const [fecha,setFecha]=useState(todayStr());
+  return(
+    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:440}}>
+        <div className="mhdr"><div className="mtitle">✅ Confirmar Pago a Instructor</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div style={{background:"var(--s2)",borderRadius:8,padding:"12px 14px",marginBottom:16}}>
+          <div style={{fontSize:15,fontWeight:700}}>{pago.nombre}</div>
+          <div style={{fontSize:12,color:"var(--tx2)",marginTop:3}}>{pago.horas} hrs × {fmt$(pago.tarifaHora)}/hr</div>
+          <div className="mono" style={{fontSize:22,fontWeight:800,marginTop:8,color:"var(--gr)"}}>{fmt$(pago.monto)}</div>
+        </div>
+        <div className="fgrid">
+          <div className="fgrp" style={{gridColumn:"1/-1"}}>
+            <label className="flbl">Fecha de pago</label>
+            <input className="finp" type="date" value={fecha} onChange={e=>setFecha(e.target.value)}/>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:18}}>
+          <button className="btn btn-o" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-g" onClick={()=>onSave(fecha)}>✓ Confirmar Pago</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── VISTA: COMISIONES DE EMPLEADOS ──────────────────────────────────────────
 function ComisionesEmpleados({ crmData, pagosGastos, setPagosGastos, showMoney }) {
   const [pagando,setPagando]=useState(null);
+  const [pagandoInstr,setPagandoInstr]=useState(null);
   const [filtro,setFiltro]=useState("todas"); // todas | pendientes | pagadas
   const disp=showMoney||fmt$;
   const mesLabel=(ym)=>{
@@ -1377,9 +1447,21 @@ function ComisionesEmpleados({ crmData, pagosGastos, setPagosGastos, showMoney }
   };
 
   const comisiones=useMemo(()=>calcComisiones(crmData),[crmData]);
+  const pagosInstructores=useMemo(()=>calcPagosInstructores(crmData),[crmData]);
 
   function yaPagado(c){
     return pagosGastos.find(p=>p.cat==="Comisiones"&&p.comisionUsuario===c.usuario&&p.comisionMesGanado===c.mesGanado);
+  }
+  function yaPagadoInstructor(r){
+    return pagosGastos.find(p=>p.cat==="Pago Instructores"&&p.instructorId===r.id&&p.mes===r.mes);
+  }
+  async function confirmarPagoInstructor(r,fecha){
+    const pago={id:uid(),gastoId:null,
+      desc:`Pago instructor — ${r.nombre} (${r.horas} hrs × ${fmt$(r.tarifaHora)}/hr)`,
+      monto:r.monto, fecha, date:fecha, mes:r.mes, cat:"Pago Instructores", notas:"",
+      createdAt:new Date().toISOString(), instructorId:r.id};
+    const upd=[...pagosGastos,pago];
+    setPagosGastos(upd); await stor("set","pagosGastos",upd); setPagandoInstr(null);
   }
 
   async function confirmarPago(c,fecha){
@@ -1474,6 +1556,43 @@ function ComisionesEmpleados({ crmData, pagosGastos, setPagosGastos, showMoney }
           </div>
         ))
       )}
+
+      <div className="sec-hdr" style={{marginTop:28}}>
+        <div className="sec-ttl">👨‍🏫 Pago a Instructores — {mesLabel(monthStr())}</div>
+      </div>
+      <div style={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:10,padding:"12px 14px",marginBottom:16,fontSize:12,color:"var(--tx2)",lineHeight:1.6}}>
+        💡 Se calcula automático: <strong style={{color:"var(--tx)"}}>horas finalizadas este mes en Horarios</strong> × la tarifa/hr de cada instructor (pestaña Maestros del CRM).
+      </div>
+      {pagosInstructores.length===0?(
+        <div className="empty"><div className="empty-icon">👨‍🏫</div><div className="empty-ttl">Sin horas finalizadas este mes</div><div className="empty-sub">En cuanto un instructor finalice una clase en "Horarios", aparecerá aquí.</div></div>
+      ):(
+        pagosInstructores.map(r=>{
+          const pagado=yaPagadoInstructor(r);
+          return(
+            <div key={r.id} className="exp-item" style={{borderColor:pagado?"rgba(16,201,138,.4)":"var(--br)"}}>
+              <div style={{flex:1,minWidth:180}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:600,fontSize:15}}>{r.nombre}</span>
+                  {pagado?<span className="badge b-gr">✓ Pagado</span>:<span className="badge b-am">⏳ Pendiente</span>}
+                </div>
+                <div style={{fontSize:11,color:"var(--tx2)",marginTop:5,display:"flex",gap:12,flexWrap:"wrap"}}>
+                  <span>⏱ {r.horas} hrs</span>
+                  <span>💵 {fmt$(r.tarifaHora)}/hr</span>
+                  {pagado&&<span style={{color:"var(--gr)"}}>🗓 Pagado el {fmtD(pagado.fecha)}</span>}
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{textAlign:"right"}}>
+                  <div className="mono" style={{fontSize:18,fontWeight:700}}>{disp(r.monto)}</div>
+                  <div style={{fontSize:10,color:"var(--tx3)"}}>{mesLabel(r.mes)}</div>
+                </div>
+                {!pagado&&<button className="btn btn-g btn-sm" onClick={()=>setPagandoInstr(r)}>✓ Marcar pagado</button>}
+              </div>
+            </div>
+          );
+        })
+      )}
+      {pagandoInstr&&<ModalConfirmarPagoInstructor pago={pagandoInstr} onSave={(f)=>confirmarPagoInstructor(pagandoInstr,f)} onClose={()=>setPagandoInstr(null)}/>}
     </div>
   );
 }

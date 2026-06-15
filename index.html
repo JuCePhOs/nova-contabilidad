@@ -177,6 +177,38 @@ function nextMonth(ym){
   return `${ny}-${String(nm).padStart(2,'0')}`;
 }
 
+// ─── Gastos fijos: ocurrencias (soporta frecuencia mensual o semanal) ──────────
+const DIAS_SEMANA=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+function diasEnMes(ym){
+  const [y,m]=ym.split('-').map(Number);
+  return new Date(y,m,0).getDate();
+}
+// Devuelve las fechas (YYYY-MM-DD) en que un gasto fijo cae dentro del mes `ym`.
+// Mensual: una sola fecha (su día, recortado al último día del mes si no existe).
+// Semanal: una fecha por cada vez que `diaSemana` ocurre en ese mes.
+function ocurrenciasGasto(fe, ym){
+  if((fe.frecuencia||"mensual")==="semanal"){
+    const [y,m]=ym.split('-').map(Number);
+    const n=diasEnMes(ym);
+    const out=[];
+    for(let d=1;d<=n;d++){
+      if(new Date(y,m-1,d).getDay()===fe.diaSemana) out.push(`${ym}-${String(d).padStart(2,'0')}`);
+    }
+    return out;
+  }
+  const dia=Math.min(fe.dia||1, diasEnMes(ym));
+  return [`${ym}-${String(dia).padStart(2,'0')}`];
+}
+// Busca si una ocurrencia específica ya fue pagada.
+// Mensual: compatibilidad con pagos viejos (sin `ocurrencia`, solo `mes`).
+// Semanal: cada ocurrencia se paga por separado, vía el campo `ocurrencia`.
+function pagoDeOcurrencia(fe, fechaISO, pagosGastos){
+  if((fe.frecuencia||"mensual")==="semanal"){
+    return pagosGastos.find(p=>p.gastoId===fe.id&&p.ocurrencia===fechaISO);
+  }
+  return pagosGastos.find(p=>p.gastoId===fe.id&&p.mes===fechaISO.slice(0,7));
+}
+
 function calcComisiones(crmData){
   if(!crmData?.matrículas) return [];
   const usuarios = crmData.usuarios||[];
@@ -505,11 +537,12 @@ function ModalIngreso({ onSave, onClose, crmData, prefill }) {
 // ─── MODAL: AGREGAR GASTO FIJO ───────────────────────────────────────────────
 function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
   const cats = expenseCats || DEFAULT_EXPENSE_CATS;
-  const [f,setF]=useState(initial||{desc:"",monto:"",dia:1,cat:cats[0]||"Renta",notas:"",enDolares:false});
+  const [f,setF]=useState(initial||{desc:"",monto:"",dia:1,frecuencia:"mensual",diaSemana:1,cat:cats[0]||"Renta",notas:"",enDolares:false});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   const [newCat,setNewCat]=useState(""); const [showCat,setShowCat]=useState(false);
-  function guardar(){ if(!f.desc||!f.monto) return; onSave({id:initial?.id||uid(),...f,monto:parseFloat(f.monto),dia:parseInt(f.dia),active:initial?.active!==undefined?initial.active:true,createdAt:initial?.createdAt||new Date().toISOString()}); }
+  function guardar(){ if(!f.desc||!f.monto) return; onSave({id:initial?.id||uid(),...f,monto:parseFloat(f.monto),dia:parseInt(f.dia)||1,diaSemana:parseInt(f.diaSemana)||0,frecuencia:f.frecuencia||"mensual",active:initial?.active!==undefined?initial.active:true,createdAt:initial?.createdAt||new Date().toISOString()}); }
   function addCat(){ if(newCat.trim()){ onSave({__addCat:newCat.trim()}); setNewCat(""); setShowCat(false); } }
+  const RS='display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px;padding:10px 13px;border:2px solid var(--br);border-radius:8px;cursor:pointer;font-size:13px;width:100%;boxSizing:border-box;background:var(--s2)';
   return(
     <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal" style={{maxWidth:520}}>
@@ -524,7 +557,31 @@ function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
               💵 El monto está en USD (se convierte a MXN automáticamente)
             </label>
           </div>
-          <div className="fgrp"><label className="flbl">Día de Pago (1-31)</label><input className="finp" type="number" min="1" max="31" value={f.dia} onChange={e=>set("dia",e.target.value)}/></div>
+          <div className="fgrp" style={{gridColumn:"1/-1"}}>
+            <label className="flbl">Frecuencia de pago</label>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <label style={{display:f.frecuencia!=="semanal"?"grid":"grid",gridTemplateColumns:"1fr auto",alignItems:"center",gap:10,padding:"10px 13px",border:`2px solid var(--br)`,borderRadius:8,cursor:"pointer",fontSize:13,background:"var(--s2)"}}>
+                <div>📅 Mensual — el mismo día cada mes</div>
+                <input type="radio" name="gf-frecuencia" checked={(f.frecuencia||"mensual")==="mensual"} onChange={()=>set("frecuencia","mensual")} style={{width:16,height:16,flexShrink:0}}/>
+              </label>
+              {(f.frecuencia||"mensual")==="mensual"&&
+                <div className="fgrp" style={{marginLeft:8}}><label className="flbl">Día de Pago (1-31)</label><input className="finp" type="number" min="1" max="31" value={f.dia} onChange={e=>set("dia",e.target.value)}/></div>
+              }
+              <label style={{display:"grid",gridTemplateColumns:"1fr auto",alignItems:"center",gap:10,padding:"10px 13px",border:`2px solid var(--br)`,borderRadius:8,cursor:"pointer",fontSize:13,background:"var(--s2)"}}>
+                <div>🔁 Semanal — cada determinado día de la semana, como pago independiente</div>
+                <input type="radio" name="gf-frecuencia" checked={f.frecuencia==="semanal"} onChange={()=>set("frecuencia","semanal")} style={{width:16,height:16,flexShrink:0}}/>
+              </label>
+              {f.frecuencia==="semanal"&&
+                <div className="fgrp" style={{marginLeft:8}}>
+                  <label className="flbl">Cada</label>
+                  <select className="finp" value={f.diaSemana??1} onChange={e=>set("diaSemana",e.target.value)}>
+                    {DIAS_SEMANA.map((d,i)=><option key={i} value={i}>{d}</option>)}
+                  </select>
+                  <div style={{fontSize:11,color:"var(--tx3)",marginTop:4}}>Cada {DIAS_SEMANA[f.diaSemana??1].toLowerCase()} aparecerá como un pago propio en Gastos Fijos.</div>
+                </div>
+              }
+            </div>
+          </div>
           <div className="fgrp" style={{gridColumn:"1/-1"}}>
             <label className="flbl">Categoría</label>
             <div style={{display:"flex",gap:6}}>
@@ -549,7 +606,7 @@ function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
 
 // ─── MODAL: PAGAR GASTO ──────────────────────────────────────────────────────
 function ModalPagarGasto({ gasto, onSave, onClose }) {
-  const [f,setF]=useState({fecha:todayStr(),monto:gasto.monto.toString(),notas:""});
+  const [f,setF]=useState({fecha:gasto._fecha||todayStr(),monto:gasto.monto.toString(),notas:""});
   return(
     <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal" style={{maxWidth:440}}>
@@ -676,7 +733,10 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
   const neto     = incMes.reduce((s,i)=>s+i.neto,0);
   const gastoT   = gastMes.reduce((s,g)=>s+g.monto,0);
   const balance  = neto - gastoT;
-  const pendAmt  = gastosFijos.filter(fe=>fe.active&&!pagosGastos.some(p=>p.gastoId===fe.id&&p.mes===cm)).reduce((s,fe)=>s+fe.monto,0);
+  const pendAmt = gastosFijos.filter(fe=>fe.active).reduce((s,fe)=>{
+    const pend=ocurrenciasGasto(fe,monthStr()).filter(fecha=>!pagoDeOcurrencia(fe,fecha,pagosGastos));
+    return s+pend.length*fe.monto;
+  },0);
 
   const chartData = useMemo(()=>{
     return Array.from({length:6},(_,i)=>{
@@ -821,6 +881,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
                   {crmSource==="firebase"&&<span style={{background:"rgba(16,201,138,.15)",color:"var(--gr)",border:"1px solid rgba(16,201,138,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>☁️ Firebase — Tiempo real · cualquier dispositivo</span>}
                   {crmSource==="claude"&&<span style={{background:"rgba(34,212,239,.1)",color:"var(--ac)",border:"1px solid rgba(34,212,239,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>🔵 Claude Storage — mismo navegador</span>}
                   {crmSource==="local"&&<span style={{background:"rgba(245,193,71,.1)",color:"var(--am)",border:"1px solid rgba(245,193,71,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>💾 Local — solo esta computadora</span>}
+                  <span style={{color:"var(--tx3)",fontSize:9,marginLeft:"auto"}}>build 2026-06-14·s8</span>
                 </div>
               </div>
               <div style={{display:"flex",gap:6}}>
@@ -1150,19 +1211,23 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
   const cmLabel=new Date().toLocaleDateString("es-MX",{month:"long",year:"numeric"});
 
   const conEstado=useMemo(()=>{
-    const hoy=new Date(); const dia=hoy.getDate();
-    return gastosFijos.filter(fe=>fe.active).map(fe=>{
-      const paid=pagosGastos.find(p=>p.gastoId===fe.id&&p.mes===cm);
-      const diff=fe.dia-dia;
-      return{...fe,paid,isOverdue:!paid&&diff<0,isDueSoon:!paid&&diff>=0&&diff<=7,daysLeft:diff};
-    }).sort((a,b)=>{
+    const hoyISO=todayStr();
+    const out=[];
+    gastosFijos.filter(fe=>fe.active).forEach(fe=>{
+      ocurrenciasGasto(fe,cm).forEach(fecha=>{
+        const paid=pagoDeOcurrencia(fe,fecha,pagosGastos);
+        const diff=Math.round((new Date(fecha+'T00:00:00')-new Date(hoyISO+'T00:00:00'))/86400000);
+        out.push({...fe,_fecha:fecha,paid,isOverdue:!paid&&diff<0,isDueSoon:!paid&&diff>=0&&diff<=7,daysLeft:diff});
+      });
+    });
+    return out.sort((a,b)=>{
       if(a.isOverdue&&!b.isOverdue)return -1; if(!a.isOverdue&&b.isOverdue)return 1;
       if(a.isDueSoon&&!b.isDueSoon)return -1; if(!a.isDueSoon&&b.isDueSoon)return 1;
-      return a.dia-b.dia;
+      return a._fecha.localeCompare(b._fecha);
     });
   },[gastosFijos,pagosGastos,cm]);
 
-  const totFijo=gastosFijos.filter(fe=>fe.active).reduce((s,fe)=>s+fe.monto,0);
+  const totFijo=conEstado.reduce((s,e)=>s+e.monto,0);
   const totPagado=conEstado.filter(e=>e.paid).reduce((s,e)=>s+e.monto,0);
   const totPend=conEstado.filter(e=>!e.paid).reduce((s,e)=>s+e.monto,0);
 
@@ -1183,7 +1248,9 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
     setGastosFijos(upd); await stor("set","gastosFijos",upd);
   }
   async function pagar({fecha,monto,notas},gasto){
-    const pago={id:uid(),gastoId:gasto.id,desc:gasto.desc,monto,fecha,date:fecha,mes:cm,cat:gasto.cat,notas,createdAt:new Date().toISOString()};
+    const pago={id:uid(),gastoId:gasto.id,desc:gasto.desc,monto,fecha,date:fecha,cat:gasto.cat,notas,createdAt:new Date().toISOString()};
+    if((gasto.frecuencia||"mensual")==="semanal") pago.ocurrencia=gasto._fecha;
+    else pago.mes=cm;
     const upd=[...pagosGastos,pago];
     setPagosGastos(upd); await stor("set","pagosGastos",upd); setPagando(null);
   }
@@ -1211,7 +1278,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
         <div className="empty"><div className="empty-icon">📋</div><div className="empty-ttl">Sin gastos fijos</div><div className="empty-sub">Agrega renta, servicios, internet, salarios, etc.</div></div>
       ):(
         conEstado.map(fe=>(
-          <div key={fe.id} className="exp-item" style={{borderColor:fe.isOverdue?"var(--rd)":fe.isDueSoon?"var(--am)":fe.paid?"rgba(16,201,138,.4)":"var(--br)"}}>
+          <div key={fe.id+'_'+fe._fecha} className="exp-item" style={{borderColor:fe.isOverdue?"var(--rd)":fe.isDueSoon?"var(--am)":fe.paid?"rgba(16,201,138,.4)":"var(--br)"}}>
             <div style={{flex:1,minWidth:180}}>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <span style={{fontWeight:600,fontSize:15}}>{fe.desc}</span>
@@ -1219,7 +1286,9 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
               </div>
               <div style={{fontSize:11,color:"var(--tx2)",marginTop:5,display:"flex",gap:12,flexWrap:"wrap"}}>
                 <span>📂 {fe.cat}</span>
-                <span>📅 Día {fe.dia} c/mes</span>
+                {(fe.frecuencia||"mensual")==="semanal"
+                  ?<span>📅 {DIAS_SEMANA[new Date(fe._fecha+'T00:00:00').getDay()]} {fmtD(fe._fecha)}</span>
+                  :<span>📅 Día {fe.dia} c/mes</span>}
                 {fe.paid&&<span style={{color:"var(--gr)"}}>🗓 Pagado el {fmtD(fe.paid.fecha)}</span>}
                 {!fe.paid&&fe.daysLeft===0&&<span style={{color:"var(--am)"}}>¡Vence hoy!</span>}
                 {!fe.paid&&fe.daysLeft>0&&<span style={{color:fe.isDueSoon?"var(--am)":"var(--tx3)"}}>Vence en {fe.daysLeft} día(s)</span>}
@@ -1230,10 +1299,10 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               <div style={{textAlign:"right"}}>
                 <div className="mono" style={{fontSize:18,fontWeight:700}}>{fmt$(fe.monto)}</div>
-                <div style={{fontSize:10,color:"var(--tx3)"}}>mensual</div>
+                <div style={{fontSize:10,color:"var(--tx3)"}}>{(fe.frecuencia||"mensual")==="semanal"?"semanal":"mensual"}</div>
               </div>
               {!fe.paid&&<button className="btn btn-g btn-sm" onClick={()=>setPagando(fe)}>✓ Pagar</button>}
-              <button className="btn btn-o btn-sm" onClick={()=>setEditando(fe)} title="Editar">✏️</button>
+              <button className="btn btn-o btn-sm" onClick={()=>setEditando(gastosFijos.find(g=>g.id===fe.id))} title="Editar">✏️</button>
               <button className="btn btn-d btn-sm" onClick={()=>desactivar(fe.id)} title="Desactivar">🗑</button>
             </div>
           </div>
@@ -2053,13 +2122,19 @@ function App() {
 
   const upcoming=useMemo(()=>{
     if(!loaded) return [];
-    const hoy=new Date(); const d=hoy.getDate(); const cm=monthStr();
-    return gastosFijos.filter(fe=>fe.active).map(fe=>{
-      const paid=pagosGastos.some(p=>p.gastoId===fe.id&&p.mes===cm);
-      if(paid) return null;
-      const diff=fe.dia-d;
-      return {...fe,daysUntilDue:diff,isOverdue:diff<0,isDueSoon:diff>=0&&diff<=7};
-    }).filter(Boolean).filter(fe=>fe.isOverdue||fe.isDueSoon).sort((a,b)=>a.daysUntilDue-b.daysUntilDue);
+    const hoyISO=todayStr();
+    const cmNow=monthStr();
+    const out=[];
+    gastosFijos.filter(fe=>fe.active).forEach(fe=>{
+      [cmNow,nextMonth(cmNow)].forEach(ym=>{
+        ocurrenciasGasto(fe,ym).forEach(fecha=>{
+          if(pagoDeOcurrencia(fe,fecha,pagosGastos)) return;
+          const diff=Math.round((new Date(fecha+'T00:00:00')-new Date(hoyISO+'T00:00:00'))/86400000);
+          if(diff<=7) out.push({...fe,_fecha:fecha,daysUntilDue:diff,isOverdue:diff<0,isDueSoon:diff>=0&&diff<=7});
+        });
+      });
+    });
+    return out.sort((a,b)=>a.daysUntilDue-b.daysUntilDue);
   },[gastosFijos,pagosGastos,loaded]);
 
   useEffect(()=>{if(loaded&&upcoming.length>0) setShowRem(true);},[loaded,upcoming.length]);
@@ -2072,11 +2147,12 @@ function App() {
   // como cualquier otro ingreso (mismo arreglo `ingresos`).
   useEffect(()=>{
     if(!loaded) return;
-    const pagosReg = crmData?.pagosRegulares;
-    if(!pagosReg || pagosReg.length===0) return;
+    const pagosReg = crmData?.pagosRegulares||[];
+    const pagosFolios = new Set(pagosReg.filter(p=>p.crmFolio!=null).map(p=>String(p.crmFolio)));
     const existentes = new Set(ingresos.filter(i=>i.crmFolio).map(i=>String(i.crmFolio)));
+
+    // Nuevos: pagos del CRM que aún no tienen un ingreso correspondiente
     const nuevos = pagosReg.filter(p=>p.crmFolio!=null && !existentes.has(String(p.crmFolio)));
-    if(nuevos.length===0) return;
     const creados = nuevos.map(p=>({
       id: uid(),
       date: (p.fechaISO||p.fecha||todayStr()).slice(0,10),
@@ -2089,7 +2165,16 @@ function App() {
       createdAt: new Date().toISOString(),
       autoSync: true,
     }));
-    const upd=[...ingresos,...creados];
+
+    // Huérfanos: ingresos que NOSOTROS creamos automáticamente, cuyo pago de origen
+    // ya no existe en el CRM (el contrato fue eliminado). Solo se eliminan los
+    // marcados autoSync — un ingreso capturado manualmente nunca se borra solo.
+    const huerfanos = ingresos.filter(i=>i.autoSync && i.crmFolio && !pagosFolios.has(String(i.crmFolio)));
+
+    if(nuevos.length===0 && huerfanos.length===0) return;
+
+    const huerfanoIds = new Set(huerfanos.map(i=>i.id));
+    const upd=[...ingresos.filter(i=>!huerfanoIds.has(i.id)), ...creados];
     setIngresos(upd);
     stor("set","ingresos",upd);
   },[crmData, ingresos, loaded]);

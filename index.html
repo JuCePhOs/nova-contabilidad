@@ -2042,6 +2042,36 @@ function App() {
 
   useEffect(()=>{if(loaded&&upcoming.length>0) setShowRem(true);},[loaded,upcoming.length]);
 
+  // ─── Auto-sincronización CRM → Ingresos ───────────────────────────────────
+  // Cuando un contrato del CRM se marca "pagado", el CRM ya guarda método de pago,
+  // comisión MP, IVA y neto (pagosRegulares). Aquí, en cuanto Firebase nos entrega
+  // ese pago y no existe ya un ingreso con el mismo crmFolio, lo creamos automáticamente
+  // — sin que el usuario tenga que capturarlo a mano. Sigue siendo editable después
+  // como cualquier otro ingreso (mismo arreglo `ingresos`).
+  useEffect(()=>{
+    if(!loaded) return;
+    const pagosReg = crmData?.pagosRegulares;
+    if(!pagosReg || pagosReg.length===0) return;
+    const existentes = new Set(ingresos.filter(i=>i.crmFolio).map(i=>String(i.crmFolio)));
+    const nuevos = pagosReg.filter(p=>p.crmFolio!=null && !existentes.has(String(p.crmFolio)));
+    if(nuevos.length===0) return;
+    const creados = nuevos.map(p=>({
+      id: uid(),
+      date: (p.fechaISO||p.fecha||todayStr()).slice(0,10),
+      desc: p.curso+(p.notas?` — ${p.notas}`:""),
+      alumno: p.alumnoNombre||"", cursoRef: p.curso||"", crmFolio: String(p.crmFolio),
+      monto: p.montoFinal||0, method: p.method||"cash",
+      cat: "Mensualidad", notas: p.notas||"",
+      comm: p.commMP||0, ivaComm: p.ivaMP||0, totalDed: (p.commMP||0)+(p.ivaMP||0),
+      neto: p.neto??(p.montoFinal||0),
+      createdAt: new Date().toISOString(),
+      autoSync: true,
+    }));
+    const upd=[...ingresos,...creados];
+    setIngresos(upd);
+    stor("set","ingresos",upd);
+  },[crmData, ingresos, loaded]);
+
   const TABS=[
     {id:"dashboard",icon:"🏠",label:"Inicio"},
     {id:"ingresos",icon:"💰",label:"Ingresos"},

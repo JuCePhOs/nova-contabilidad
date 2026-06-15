@@ -181,22 +181,26 @@ function calcComisiones(crmData){
   if(!crmData?.matrículas) return [];
   const usuarios = crmData.usuarios||[];
   const pagosReg = crmData.pagosRegulares||[];
+  const cmActual = monthStr();
   const nombreDe = (u)=>{
     const us=usuarios.find(x=>x.username===u);
     return us?.name||u||"Sin asignar";
   };
   const grupos={};
   crmData.matrículas.forEach(m=>{
-    const fechaRef = m.fechaISO || m.createdAt;
-    if(!fechaRef||!m.createdBy) return;
     // "Pagado y confirmado": existe un pago para este folio, o para el folio representante
     // del paquete al que pertenece este contrato (1 pago puede cubrir varios contratos/grupos)
     const repFolio = (m.paqueteFolios&&m.paqueteFolios[0]) ?? m.folio;
     const pagado=pagosReg.some(p=>String(p.crmFolio)===String(m.folio)||String(p.crmFolio)===String(repFolio));
     if(!pagado) return;
+    // Contratos antiguos pueden no tener fechaISO/createdAt/createdBy. En vez de
+    // descartarlos silenciosamente, los agrupamos en "Sin asignar" para que el
+    // monto siga siendo visible (y se pueda reasignar manualmente más adelante).
+    const fechaRef = m.fechaISO || m.createdAt || (cmActual+'-01');
     const mesGanado=fechaRef.slice(0,7);
-    const key=m.createdBy+"|"+mesGanado;
-    if(!grupos[key]) grupos[key]={usuario:m.createdBy,nombreUsuario:nombreDe(m.createdBy),mesGanado,folios:[]};
+    const creador = m.createdBy || 'sin_asignar';
+    const key=creador+"|"+mesGanado;
+    if(!grupos[key]) grupos[key]={usuario:creador,nombreUsuario:creador==='sin_asignar'?'Sin asignar':nombreDe(creador),mesGanado,folios:[]};
     grupos[key].folios.push(m.folio);
   });
   return Object.values(grupos).map(g=>{
@@ -709,6 +713,24 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
           </div>
         </div>
       )}
+
+      {(()=>{
+        const cm=monthStr();
+        const pend=calcComisiones(crmData).filter(c=>!pagosGastos.some(p=>p.cat==="Comisiones"&&p.comisionUsuario===c.usuario&&p.comisionMesGanado===c.mesGanado));
+        const total=pend.reduce((s,c)=>s+c.monto,0);
+        if(total<=0) return null;
+        const meses=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+        const [yy,mm]=nextMonth(cm).split('-');
+        return(
+          <div className="alert al-ac" style={{cursor:"pointer"}} onClick={()=>setTab("comisiones")}>
+            <span style={{fontSize:20}}>💼</span>
+            <div>
+              <div style={{fontWeight:700,color:"var(--tx)"}}>Comisiones por pagar: {fmt$(total)}</div>
+              <div style={{fontSize:12,marginTop:2,opacity:.85}}>Se liquidan el 15 de {meses[parseInt(mm)-1]} {yy} · Clic para ir a Comisiones</div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{fontSize:12,color:"var(--tx2)",marginBottom:14,textTransform:"capitalize"}}>📅 Resumen de {cmLabel}</div>
 

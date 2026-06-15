@@ -63,7 +63,6 @@
 </style>
 </head>
 <body>
-<div style="background:#FFD60A;color:#000;text-align:center;font-weight:800;font-size:13px;padding:7px 0;letter-spacing:1px">⚡ BUILD 2026-06-14 · s8 ⚡</div>
 <div id="root"><div id="boot">⚡ Cargando…</div></div>
 
 <script type="text/babel" data-presets="react">
@@ -170,6 +169,12 @@ function crmCostoCurso(crm, nombreCurso) {
 // Se cuenta en el mes en que se CREÓ el contrato (mesGanado);
 // se liquida el día 15 del mes siguiente (mesPago).
 const COMISION_POR_CONTRATO = 120;
+
+// Un pago de gasto fijo "cae" en el mes ym si: es mensual con ese mes (g.mes),
+// o es una ocurrencia semanal cuya fecha está dentro de ese mes.
+function gastoEnMes(g, ym){
+  return g.mes===ym || (g.ocurrencia&&g.ocurrencia.startsWith(ym));
+}
 
 function nextMonth(ym){
   const [y,m]=ym.split('-').map(Number);
@@ -489,7 +494,7 @@ function ModalIngreso({ onSave, onClose, crmData, prefill }) {
   return(
     <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal">
-        <div className="mhdr"><div className="mtitle">💰 Registrar Ingreso</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div className="mhdr"><div className="mtitle">{f.id?"✏️ Editar Ingreso":"💰 Registrar Ingreso"}</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div className="fgrid">
           <div className="fgrp"><label className="flbl">Fecha *</label><input className="finp" type="date" value={f.date} onChange={e=>set("date",e.target.value)}/></div>
           <div className="fgrp"><label className="flbl">Categoría</label><select className="finp" value={f.cat} onChange={e=>set("cat",e.target.value)}>{INCOME_CATS.map(c=><option key={c}>{c}</option>)}</select></div>
@@ -755,7 +760,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
   }
 
   const incMes   = ingresos.filter(i=>i.date.startsWith(cm));
-  const gastMes  = pagosGastos.filter(g=>g.mes===cm);
+  const gastMes  = pagosGastos.filter(g=>gastoEnMes(g,cm));
   const bruto    = incMes.reduce((s,i)=>s+i.monto,0);
   const neto     = incMes.reduce((s,i)=>s+i.neto,0);
   const gastoT   = gastMes.reduce((s,g)=>s+g.monto,0);
@@ -772,7 +777,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
       return{
         m:d.toLocaleDateString("es-MX",{month:"short"}),
         ing:+ingresos.filter(x=>x.date.startsWith(ym)).reduce((s,x)=>s+x.neto,0).toFixed(2),
-        gst:+pagosGastos.filter(x=>x.mes===ym).reduce((s,x)=>s+x.monto,0).toFixed(2),
+        gst:+pagosGastos.filter(x=>gastoEnMes(x,ym)).reduce((s,x)=>s+x.monto,0).toFixed(2),
       };
     });
   },[ingresos,pagosGastos]);
@@ -923,7 +928,6 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
                   {crmSource==="firebase"&&<span style={{background:"rgba(16,201,138,.15)",color:"var(--gr)",border:"1px solid rgba(16,201,138,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>☁️ Firebase — Tiempo real · cualquier dispositivo</span>}
                   {crmSource==="claude"&&<span style={{background:"rgba(34,212,239,.1)",color:"var(--ac)",border:"1px solid rgba(34,212,239,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>🔵 Claude Storage — mismo navegador</span>}
                   {crmSource==="local"&&<span style={{background:"rgba(245,193,71,.1)",color:"var(--am)",border:"1px solid rgba(245,193,71,.3)",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:600}}>💾 Local — solo esta computadora</span>}
-                  <span style={{color:"var(--tx3)",fontSize:9,marginLeft:"auto"}}>build 2026-06-14·s8</span>
                 </div>
               </div>
               <div style={{display:"flex",gap:6}}>
@@ -1099,6 +1103,22 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
   async function guardarIngreso(inc){
     const upd=[...ingresos,inc];
     setIngresos(upd); await stor("set","ingresos",upd); setShowModal(false); setPrefill(null);
+  }
+  async function editarIngreso(inc,id){
+    const upd=ingresos.map(i=>i.id===id?{...inc,id}:i);
+    setIngresos(upd); await stor("set","ingresos",upd);
+  }
+  async function eliminarIngresoHist(id){
+    const upd=ingresos.filter(i=>i.id!==id);
+    setIngresos(upd); await stor("set","ingresos",upd);
+  }
+  async function editarPagoGastoHist(pago){
+    const upd=pagosGastos.map(p=>p.id===pago.id?pago:p);
+    setPagosGastos(upd); await stor("set","pagosGastos",upd);
+  }
+  async function eliminarPagoGastoHist(id){
+    const upd=pagosGastos.filter(p=>p.id!==id);
+    setPagosGastos(upd); await stor("set","pagosGastos",upd);
   }
 
   function abrirModalPago(a) {
@@ -1598,11 +1618,35 @@ function ComisionesEmpleados({ crmData, pagosGastos, setPagosGastos, showMoney }
 }
 
 
+// ─── MODAL: EDITAR GASTO (desde Historial) ────────────────────────────────────
+function ModalEditarGasto({ pago, onSave, onClose }) {
+  const [f,setF]=useState({...pago, _fecha: pago.fecha||pago.date||todayStr()});
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  return(
+    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:440}}>
+        <div className="mhdr"><div className="mtitle">✏️ Editar Gasto</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div className="fgrid">
+          <div className="fgrp"><label className="flbl">Fecha</label><input className="finp" type="date" value={f._fecha} onChange={e=>set("_fecha",e.target.value)}/></div>
+          <div className="fgrp"><label className="flbl">Monto</label><input className="finp mono" type="number" min="0" step="0.01" value={f.monto} onChange={e=>set("monto",e.target.value)}/></div>
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Descripción</label><input className="finp" value={f.desc||""} onChange={e=>set("desc",e.target.value)}/></div>
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Notas</label><input className="finp" value={f.notas||""} onChange={e=>set("notas",e.target.value)}/></div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:18}}>
+          <button className="btn btn-o" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-p" onClick={()=>onSave({...f,monto:parseFloat(f.monto)||0,fecha:f._fecha,date:f._fecha})}>✓ Guardar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── VISTA: HISTORIAL ────────────────────────────────────────────────────────
-function Historial({ ingresos, pagosGastos }) {
+function Historial({ ingresos, pagosGastos, crmData, onEditIngreso, onDeleteIngreso, onEditGasto, onDeleteGasto }) {
   const [mes,setMes]=useState(monthStr());
   const [tipo,setTipo]=useState("todo");
   const [q,setQ]=useState("");
+  const [editing,setEditing]=useState(null);
 
   const all=useMemo(()=>{
     const inc=ingresos.map(i=>({...i,tipo:"ingreso",fecha:i.date,display:i.monto,netDisplay:i.neto}));
@@ -1645,7 +1689,7 @@ function Historial({ ingresos, pagosGastos }) {
         <div className="card" style={{padding:0}}>
           <div className="twrap">
             <table>
-              <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Categoría</th><th className="tr">Importe</th><th className="tr">Neto</th></tr></thead>
+              <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Categoría</th><th className="tr">Importe</th><th className="tr">Neto</th><th className="tr">Acciones</th></tr></thead>
               <tbody>
                 {all.map(t=>(
                   <tr key={t.id}>
@@ -1659,6 +1703,18 @@ function Historial({ ingresos, pagosGastos }) {
                     <td><span className="badge b-gy">{t.cat}</span></td>
                     <td className="mono tr" style={{color:t.tipo==="ingreso"?"var(--tx)":"var(--rd)"}}>{t.tipo==="ingreso"?fmt$(t.monto):"-"+fmt$(t.monto)}</td>
                     <td className="mono tr" style={{color:t.tipo==="ingreso"?"var(--gr)":"var(--rd)",fontWeight:600}}>{t.tipo==="ingreso"?fmt$(t.neto):"-"+fmt$(t.monto)}</td>
+                    <td className="tr" style={{whiteSpace:"nowrap"}}>
+                      <button className="btn btn-o btn-sm" title="Editar" onClick={()=>setEditing(t)} style={{padding:"3px 7px"}}>✏️</button>
+                      {" "}
+                      <button className="btn btn-d btn-sm" title="Eliminar" style={{padding:"3px 7px"}} onClick={()=>{
+                        if(t.tipo==="ingreso"){
+                          const msg=t.crmFolio?`Este ingreso viene del contrato CRM #${t.crmFolio}. Si ese contrato sigue activo, podría volver a generarse solo. ¿Eliminar igual?`:"¿Eliminar este ingreso?";
+                          if(confirm(msg)) onDeleteIngreso(t.id);
+                        } else {
+                          if(confirm("¿Eliminar este gasto?")) onDeleteGasto(t.id);
+                        }
+                      }}>🗑</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1666,6 +1722,10 @@ function Historial({ ingresos, pagosGastos }) {
           </div>
         </div>
       )}
+      {editing&&editing.tipo==="ingreso"&&<ModalIngreso prefill={editing} crmData={crmData}
+        onSave={(inc)=>{onEditIngreso(inc,editing.id);setEditing(null);}} onClose={()=>setEditing(null)}/>}
+      {editing&&editing.tipo==="gasto"&&<ModalEditarGasto pago={editing}
+        onSave={(p)=>{onEditGasto(p);setEditing(null);}} onClose={()=>setEditing(null)}/>}
     </div>
   );
 }
@@ -1677,7 +1737,7 @@ function Reportes({ ingresos, pagosGastos }) {
       const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-11+i);
       const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
       const inc=ingresos.filter(x=>x.date.startsWith(ym));
-      const exp=pagosGastos.filter(x=>x.mes===ym);
+      const exp=pagosGastos.filter(x=>gastoEnMes(x,ym));
       const ing=+inc.reduce((s,x)=>s+x.neto,0).toFixed(2);
       const gst=+exp.reduce((s,x)=>s+x.monto,0).toFixed(2);
       return{m:d.toLocaleDateString("es-MX",{month:"short",year:"2-digit"}),ing,gst,bal:+(ing-gst).toFixed(2),n:inc.length};
@@ -1780,7 +1840,7 @@ function Exportar({ ingresos, pagosGastos, gastosFijos, crmData }) {
         // Resumen
         const cm=monthStr();
         const mInc=ingresos.filter(i=>i.date.startsWith(cm));
-        const mGst=pagosGastos.filter(g=>g.mes===cm);
+        const mGst=pagosGastos.filter(g=>gastoEnMes(g,cm));
         const ws=XLSX.utils.aoa_to_sheet([
           ["RESUMEN CONTABLE — ACADEMIA DE COMPUTACIÓN"],
           ["Generado el",new Date().toLocaleString("es-MX")],[""],
@@ -2377,7 +2437,9 @@ function App() {
           {tab==="pronostico"&&<Pronostico crmData={crmData} ingresos={ingresos} pagosGastos={pagosGastos} gastosFijos={gastosFijos}/>}
           {tab==="gastos"&&<GastosFijos gastosFijos={gastosFijos} setGastosFijos={setGastosFijos} pagosGastos={pagosGastos} setPagosGastos={setPagosGastos} expenseCats={expenseCats} addExpenseCat={addExpenseCat} showMoney={showMoney}/>}
           {tab==="comisiones"&&<ComisionesEmpleados crmData={crmData} pagosGastos={pagosGastos} setPagosGastos={setPagosGastos} showMoney={showMoney}/>}
-          {tab==="historial"&&<Historial ingresos={ingresos} pagosGastos={pagosGastos}/>}
+          {tab==="historial"&&<Historial ingresos={ingresos} pagosGastos={pagosGastos} crmData={crmData}
+            onEditIngreso={editarIngreso} onDeleteIngreso={eliminarIngresoHist}
+            onEditGasto={editarPagoGastoHist} onDeleteGasto={eliminarPagoGastoHist}/>}
           {tab==="reportes"&&<Reportes ingresos={ingresos} pagosGastos={pagosGastos}/>}
           {tab==="exportar"&&<Exportar ingresos={ingresos} pagosGastos={pagosGastos} gastosFijos={gastosFijos} crmData={crmData}/>}
         </div>

@@ -1675,8 +1675,8 @@ function Historial({ ingresos, pagosGastos, crmData, onEditIngreso, onDeleteIngr
 
       {all.length>0&&(
         <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
-          {[{l:"Ingresos netos:",v:fmt$(totInc),c:"var(--gr)"},{l:"Total gastos:",v:fmt$(totGst),c:"var(--rd)"},{l:"Balance:",v:(totInc-totGst>=0?"+":"")+fmt$(totInc-totGst),c:totInc-totGst>=0?"var(--gr)":"var(--rd)"}].map(({l,v,c})=>(
-            <div key={l} style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:8,padding:"8px 14px",fontSize:13}}>
+          {[{l:"Ingresos netos:",v:fmt$(totInc),c:"var(--gr)",f:"ingreso"},{l:"Total gastos:",v:fmt$(totGst),c:"var(--rd)",f:"gasto"},{l:"Balance:",v:(totInc-totGst>=0?"+":"")+fmt$(totInc-totGst),c:totInc-totGst>=0?"var(--gr)":"var(--rd)",f:"todo"}].map(({l,v,c,f})=>(
+            <div key={l} onClick={()=>setTipo(f)} style={{background:"var(--s1)",border:`1px solid ${tipo===f?c:"var(--br)"}`,borderRadius:8,padding:"8px 14px",fontSize:13,cursor:"pointer"}}>
               <span style={{color:"var(--tx2)"}}>{l} </span><span style={{color:c,fontFamily:"var(--mono)",fontWeight:600}}>{v}</span>
             </div>
           ))}
@@ -1989,11 +1989,11 @@ function Pronostico({ crmData, ingresos, pagosGastos, gastosFijos }) {
   const mats = crmData?.matrículas||[];
   const cursos = crmData?.cursos||[];
 
-  // Income already registered for a month (real)
+  // Income already registered for a month (real).
+  // ingresos[] ya es un superconjunto de crmData.pagosRegulares (vía auto-sync),
+  // así que sumar ambos duplicaba cada pago.
   const ingresoReal=(ym)=>{
-    const appInc = ingresos.filter(i=>i.date.startsWith(ym)).reduce((s,i)=>s+i.neto,0);
-    const crmInc = (crmData?.pagosRegulares||[]).filter(p=>(p.fecha?.startsWith(ym)||p.fechaISO?.startsWith(ym))).reduce((s,p)=>s+(p.neto||p.montoFinal||0),0);
-    return appInc+crmInc;
+    return ingresos.filter(i=>i.date.startsWith(ym)).reduce((s,i)=>s+i.neto,0);
   };
 
   // Min projected income = sum of base costs of active students

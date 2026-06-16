@@ -1323,7 +1323,9 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
     const hoyISO=todayStr();
     const out=[];
     gastosFijos.filter(fe=>fe.active).forEach(fe=>{
+      const skipped=new Set(fe.skippedDates||[]);
       ocurrenciasGasto(fe,cm).forEach(fecha=>{
+        if(skipped.has(fecha)) return; // esta semana fue omitida
         const paid=pagoDeOcurrencia(fe,fecha,pagosGastos);
         const diff=Math.round((new Date(fecha+'T00:00:00')-new Date(hoyISO+'T00:00:00'))/86400000);
         out.push({...fe,_fecha:fecha,paid,isOverdue:!paid&&diff<0,isDueSoon:!paid&&diff>=0&&diff<=7,daysLeft:diff});
@@ -1351,6 +1353,12 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
   async function desactivar(id){
     if(!confirm("¿Desactivar este gasto fijo?")) return;
     const upd=gastosFijos.map(fe=>fe.id===id?{...fe,active:false}:fe);
+    setGastosFijos(upd); await stor("set","gastosFijos",upd);
+  }
+  async function omitirOcurrencia(gastoId, fecha){
+    // Añade la fecha a skippedDates del gastoFijo, sin afectar otras semanas
+    const upd=gastosFijos.map(fe=>fe.id===gastoId
+      ?{...fe,skippedDates:[...(fe.skippedDates||[]),fecha]}:fe);
     setGastosFijos(upd); await stor("set","gastosFijos",upd);
   }
   async function eliminarPagoOcurrencia(pagoId){
@@ -1434,12 +1442,18 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
               <button className="btn btn-o btn-sm" onClick={()=>setEditando(gastosFijos.find(g=>g.id===fe.id))} title="Editar">✏️</button>
               <button className="btn btn-d btn-sm" title={fe.paid?"Eliminar pago de esta semana":"Desactivar gasto fijo"}
   onClick={()=>{
-    if((fe.frecuencia||"mensual")==="semanal" && fe.paid){
-      // Borrar SOLO el registro de pago de esta ocurrencia específica
-      if(!confirm("¿Eliminar el pago registrado para esta semana ("+fe._fecha+")?")) return;
-      const pagoPk=pagosGastos.find(p=>p.gastoId===fe.id&&(p.ocurrencia===fe._fecha||p.mes===fe._fecha.slice(0,7)));
-      if(!pagoPk){alert("No se encontró el registro de pago.");return;}
-      eliminarPagoOcurrencia(pagoPk.id);
+    if((fe.frecuencia||"mensual")==="semanal"){
+      if(fe.paid){
+        // Semana pagada → borrar solo ese registro de pago
+        if(!confirm("¿Eliminar el pago de la semana "+fe._fecha+"?")) return;
+        const pagoPk=pagosGastos.find(p=>p.gastoId===fe.id&&(p.ocurrencia===fe._fecha||(p.mes===fe._fecha.slice(0,7)&&!p.ocurrencia)));
+        if(pagoPk) { eliminarPagoOcurrencia(pagoPk.id); return; }
+        alert("No se encontró el registro de pago."); return;
+      } else {
+        // Semana NO pagada → marcar esta fecha como omitida (sin afectar el resto)
+        if(!confirm("¿Omitir esta semana ("+fe._fecha+") sin registrar pago?")) return;
+        omitirOcurrencia(fe.id, fe._fecha);
+      }
     } else {
       desactivar(fe.id);
     }

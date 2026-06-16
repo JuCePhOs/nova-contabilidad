@@ -1440,24 +1440,26 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
               </div>
               {!fe.paid&&<button className="btn btn-g btn-sm" onClick={()=>setPagando(fe)}>✓ Pagar</button>}
               <button className="btn btn-o btn-sm" onClick={()=>setEditando(gastosFijos.find(g=>g.id===fe.id))} title="Editar">✏️</button>
-              <button className="btn btn-d btn-sm" title={fe.paid?"Eliminar pago de esta semana":"Desactivar gasto fijo"}
-  onClick={()=>{
-    if((fe.frecuencia||"mensual")==="semanal"){
-      if(fe.paid){
-        // Semana pagada → borrar solo ese registro de pago
-        if(!confirm("¿Eliminar el pago de la semana "+fe._fecha+"?")) return;
-        const pagoPk=pagosGastos.find(p=>p.gastoId===fe.id&&(p.ocurrencia===fe._fecha||(p.mes===fe._fecha.slice(0,7)&&!p.ocurrencia)));
-        if(pagoPk) { eliminarPagoOcurrencia(pagoPk.id); return; }
-        alert("No se encontró el registro de pago."); return;
-      } else {
-        // Semana NO pagada → marcar esta fecha como omitida (sin afectar el resto)
-        if(!confirm("¿Omitir esta semana ("+fe._fecha+") sin registrar pago?")) return;
-        omitirOcurrencia(fe.id, fe._fecha);
-      }
-    } else {
-      desactivar(fe.id);
-    }
-  }}>🗑</button>
+              <button className="btn btn-d btn-sm" title="Eliminar…" onClick={()=>{
+                if((fe.frecuencia||"mensual")==="semanal"){
+                  if(!confirm(
+                    "Semana: "+fe._fecha+"\n\n"+
+                    "OK = Eliminar SOLO esta semana\n"+
+                    "Cancelar = No hacer nada\n\n"+
+                    "(Para desactivar TODO el gasto, usa el botón ✏️ Editar)"
+                  )) return;
+                  if(fe.paid){
+                    const pk=pagosGastos.find(p=>p.gastoId===fe.id&&(p.ocurrencia===fe._fecha||(p.mes===fe._fecha.slice(0,7)&&!p.ocurrencia)));
+                    if(pk) eliminarPagoOcurrencia(pk.id);
+                    else alert("No se encontró el pago de esta semana.");
+                  } else {
+                    omitirOcurrencia(fe.id, fe._fecha);
+                  }
+                } else {
+                  if(!confirm("¿Desactivar este gasto fijo completo?")) return;
+                  desactivar(fe.id);
+                }
+              }}>🗑</button>
             </div>
           </div>
         ))

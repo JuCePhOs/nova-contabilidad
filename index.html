@@ -954,7 +954,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos, upcoming, setTab, crmDa
 }
 
 // ─── VISTA: INGRESOS ─────────────────────────────────────────────────────────
-function Ingresos({ ingresos, setIngresos, crmData, showMoney }) {
+function Ingresos({ ingresos, setIngresos, crmData, showMoney, onDelete }) {
   const [show,setShow]=useState(false);
   const [editando,setEditando]=useState(null);
   const disp=showMoney||fmt$;
@@ -983,6 +983,7 @@ function Ingresos({ ingresos, setIngresos, crmData, showMoney }) {
   }
   async function del(id){
     if(!confirm("¿Eliminar este ingreso?")) return;
+    if(onDelete){ await onDelete(id); return; }
     const upd=ingresos.filter(i=>i.id!==id);
     setIngresos(upd); await stor("set","ingresos",upd);
   }
@@ -1264,11 +1265,57 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
 }
 
 // ─── VISTA: GASTOS FIJOS ─────────────────────────────────────────────────────
+// ─── MODAL: GASTO EXTRAORDINARIO ─────────────────────────────────────────────
+// Para gastos no recurrentes: reparaciones, equipo inesperado, cualquier costo
+// fuera del presupuesto habitual. Se registra directamente en pagosGastos.
+function ModalGastoExtraordinario({ expenseCats, pagosGastos, setPagosGastos, onClose }) {
+  const [f,setF]=useState({desc:"",monto:"",fecha:todayStr(),cat:"Otro",notas:""});
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  async function guardar(){
+    if(!f.desc||!f.monto){ alert("Completa descripción y monto."); return; }
+    const pago={id:uid(),desc:f.desc,monto:parseFloat(f.monto)||0,fecha:f.fecha,date:f.fecha,
+      cat:f.cat,notas:f.notas,createdAt:new Date().toISOString(),tipo:"extraordinario",mes:f.fecha.slice(0,7)};
+    const upd=[...pagosGastos,pago];
+    setPagosGastos(upd); await stor("set","pagosGastos",upd); onClose();
+  }
+  return(
+    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:460}}>
+        <div className="mhdr"><div className="mtitle">⚡ Gasto Extraordinario</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div style={{fontSize:12,color:"var(--tx2)",marginBottom:14,lineHeight:1.5}}>
+          Gasto puntual no contemplado en el presupuesto mensual (reparación, equipo, evento, etc.).
+        </div>
+        <div className="fgrid">
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Descripción</label>
+            <input className="finp" placeholder="ej. Reparación de computadora" value={f.desc} onChange={e=>set("desc",e.target.value)}/></div>
+          <div className="fgrp"><label className="flbl">Monto</label>
+            <input className="finp mono" type="number" min="0" step="0.01" placeholder="0.00" value={f.monto} onChange={e=>set("monto",e.target.value)}/></div>
+          <div className="fgrp"><label className="flbl">Fecha</label>
+            <input className="finp" type="date" value={f.fecha} onChange={e=>set("fecha",e.target.value)}/></div>
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Categoría</label>
+            <select className="finp" value={f.cat} onChange={e=>set("cat",e.target.value)}>
+              {(expenseCats||[]).map(c=><option key={c}>{c}</option>)}
+              <option value="Extraordinario">Extraordinario</option>
+            </select></div>
+          <div className="fgrp" style={{gridColumn:"1/-1"}}><label className="flbl">Notas</label>
+            <input className="finp" placeholder="Referencia, proveedor, justificación…" value={f.notas} onChange={e=>set("notas",e.target.value)}/></div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:18}}>
+          <button className="btn btn-o" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-p" onClick={guardar}>⚡ Registrar gasto</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos, expenseCats, addExpenseCat, showMoney }) {
   const cats = expenseCats || DEFAULT_EXPENSE_CATS;
   const [showForm,setShowForm]=useState(false);
   const [editando,setEditando]=useState(null);
   const [pagando,setPagando]=useState(null);
+  const [filtroG,setFiltroG]=useState("todos");
+  const [showExtraord,setShowExtraord]=useState(false);
   const cm=monthStr();
   const cmLabel=new Date().toLocaleDateString("es-MX",{month:"long",year:"numeric"});
 
@@ -1289,6 +1336,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
     });
   },[gastosFijos,pagosGastos,cm]);
 
+  const conEstadoFiltrado=filtroG==="todos"?conEstado:filtroG==="pendientes"?conEstado.filter(fe=>!fe.paid):conEstado.filter(fe=>!!fe.paid);
   const totFijo=conEstado.reduce((s,e)=>s+e.monto,0);
   const totPagado=conEstado.filter(e=>e.paid).reduce((s,e)=>s+e.monto,0);
   const totPend=conEstado.filter(e=>!e.paid).reduce((s,e)=>s+e.monto,0);
@@ -1320,12 +1368,16 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
 
   return(
     <div>
+      {showExtraord&&<ModalGastoExtraordinario expenseCats={cats} pagosGastos={pagosGastos} setPagosGastos={setPagosGastos} onClose={()=>setShowExtraord(false)}/>}
       {(showForm||editando)&&<ModalGastoFijo expenseCats={cats} initial={editando||undefined} onSave={handleSave} onClose={()=>{setShowForm(false);setEditando(null);}}/>}
       {pagando&&<ModalPagarGasto gasto={pagando} onSave={(d)=>pagar(d,pagando)} onClose={()=>setPagando(null)}/>}
 
       <div className="sec-hdr">
         <div className="sec-ttl">📋 Gastos Fijos</div>
-        <button className="btn btn-p" onClick={()=>setShowForm(true)}>+ Agregar Gasto Fijo</button>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={()=>setShowExtraord(true)}>⚡ Gasto Extraordinario</button>
+          <button className="btn btn-p" onClick={()=>setShowForm(true)}>+ Agregar Gasto Fijo</button>
+        </div>
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:16}}>
@@ -1334,12 +1386,23 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
         ))}
       </div>
 
-      <div style={{fontSize:12,color:"var(--tx2)",marginBottom:12}}>Estado — <strong style={{color:"var(--tx)",textTransform:"capitalize"}}>{cmLabel}</strong></div>
+      <div style={{fontSize:12,color:"var(--tx2)",marginBottom:8}}>Estado — <strong style={{color:"var(--tx)",textTransform:"capitalize"}}>{cmLabel}</strong></div>
 
-      {conEstado.length===0?(
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+        {[{l:"Todos",f:"todos"},{l:"⏳ Pendientes",f:"pendientes"},{l:"✓ Pagados",f:"pagados"}].map(({l,f})=>(
+          <button key={f} onClick={()=>setFiltroG(f)}
+            style={{padding:"5px 13px",borderRadius:7,border:`1px solid ${filtroG===f?"var(--ac)":"var(--br)"}`,
+            background:filtroG===f?"var(--ac)":"transparent",color:filtroG===f?"#fff":"var(--tx2)",
+            cursor:"pointer",fontSize:13,fontWeight:filtroG===f?700:400}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {conEstadoFiltrado.length===0?(
         <div className="empty"><div className="empty-icon">📋</div><div className="empty-ttl">Sin gastos fijos</div><div className="empty-sub">Agrega renta, servicios, internet, salarios, etc.</div></div>
       ):(
-        conEstado.map(fe=>(
+        conEstadoFiltrado.map(fe=>(
           <div key={fe.id+'_'+fe._fecha} className="exp-item" style={{borderColor:fe.isOverdue?"var(--rd)":fe.isDueSoon?"var(--am)":fe.paid?"rgba(16,201,138,.4)":"var(--br)"}}>
             <div style={{flex:1,minWidth:180}}>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -2460,7 +2523,7 @@ function App() {
 
         <div className="cnt">
           {tab==="dashboard"&&<Dashboard ingresos={ingresos} gastosFijos={gastosFijos} pagosGastos={pagosGastos} upcoming={upcoming} setTab={setTab} crmData={crmData} crmSource={crmSource} refrescarCRM={refrescarCRM} onImport={onImport}/>}
-          {tab==="ingresos"&&<Ingresos ingresos={ingresos} setIngresos={setIngresos} crmData={crmData} showMoney={showMoney}/>}
+          {tab==="ingresos"&&<Ingresos ingresos={ingresos} setIngresos={setIngresos} crmData={crmData} showMoney={showMoney} onDelete={eliminarIngresoHist}/>}
           {tab==="alumnos"&&<AlumnosCRM crmData={crmData} ingresos={ingresos} setIngresos={setIngresos}/>}
           {tab==="pronostico"&&<Pronostico crmData={crmData} ingresos={ingresos} pagosGastos={pagosGastos} gastosFijos={gastosFijos}/>}
           {tab==="gastos"&&<GastosFijos gastosFijos={gastosFijos} setGastosFijos={setGastosFijos} pagosGastos={pagosGastos} setPagosGastos={setPagosGastos} expenseCats={expenseCats} addExpenseCat={addExpenseCat} showMoney={showMoney}/>}

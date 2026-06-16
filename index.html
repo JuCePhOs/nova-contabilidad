@@ -492,7 +492,7 @@ function ModalIngreso({ onSave, onClose, crmData, prefill }) {
 
   const methods=[["cash","💵 Efectivo"],["transfer","🏦 Transferencia"],["card","💳 Terminal MP"]];
   return(
-    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="moverlay" >
       <div className="modal">
         <div className="mhdr"><div className="mtitle">{f.id?"✏️ Editar Ingreso":"💰 Registrar Ingreso"}</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div className="fgrid">
@@ -576,7 +576,7 @@ function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
   function addCat(){ if(newCat.trim()){ onSave({__addCat:newCat.trim()}); setNewCat(""); setShowCat(false); } }
   const RS='display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px;padding:10px 13px;border:2px solid var(--br);border-radius:8px;cursor:pointer;font-size:13px;width:100%;boxSizing:border-box;background:var(--s2)';
   return(
-    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="moverlay" >
       <div className="modal" style={{maxWidth:520}}>
         <div className="mhdr"><div className="mtitle">{initial?"✏️ Editar Gasto Fijo":"📋 Nuevo Gasto Fijo"}</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div className="fgrid">
@@ -640,7 +640,7 @@ function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
 function ModalPagarGasto({ gasto, onSave, onClose }) {
   const [f,setF]=useState({fecha:gasto._fecha||todayStr(),monto:gasto.monto.toString(),notas:""});
   return(
-    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="moverlay" >
       <div className="modal" style={{maxWidth:440}}>
         <div className="mhdr"><div className="mtitle">✅ Registrar Pago</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div style={{background:"var(--s2)",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:14}}>
@@ -1279,7 +1279,7 @@ function ModalGastoExtraordinario({ expenseCats, pagosGastos, setPagosGastos, on
     setPagosGastos(upd); await stor("set","pagosGastos",upd); onClose();
   }
   return(
-    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="moverlay" >
       <div className="modal" style={{maxWidth:460}}>
         <div className="mhdr"><div className="mtitle">⚡ Gasto Extraordinario</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div style={{fontSize:12,color:"var(--tx2)",marginBottom:14,lineHeight:1.5}}>
@@ -1352,6 +1352,10 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
     if(!confirm("¿Desactivar este gasto fijo?")) return;
     const upd=gastosFijos.map(fe=>fe.id===id?{...fe,active:false}:fe);
     setGastosFijos(upd); await stor("set","gastosFijos",upd);
+  }
+  async function eliminarPagoOcurrencia(pagoId){
+    const upd=pagosGastos.filter(p=>p.id!==pagoId);
+    setPagosGastos(upd); await stor("set","pagosGastos",upd);
   }
   async function reactivar(id){
     const upd=gastosFijos.map(fe=>fe.id===id?{...fe,active:true}:fe);
@@ -1428,7 +1432,18 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos, setPagosGastos,
               </div>
               {!fe.paid&&<button className="btn btn-g btn-sm" onClick={()=>setPagando(fe)}>✓ Pagar</button>}
               <button className="btn btn-o btn-sm" onClick={()=>setEditando(gastosFijos.find(g=>g.id===fe.id))} title="Editar">✏️</button>
-              <button className="btn btn-d btn-sm" onClick={()=>desactivar(fe.id)} title="Desactivar">🗑</button>
+              <button className="btn btn-d btn-sm" title={fe.paid?"Eliminar pago de esta semana":"Desactivar gasto fijo"}
+  onClick={()=>{
+    if((fe.frecuencia||"mensual")==="semanal" && fe.paid){
+      // Borrar SOLO el registro de pago de esta ocurrencia específica
+      if(!confirm("¿Eliminar el pago registrado para esta semana ("+fe._fecha+")?")) return;
+      const pagoPk=pagosGastos.find(p=>p.gastoId===fe.id&&(p.ocurrencia===fe._fecha||p.mes===fe._fecha.slice(0,7)));
+      if(!pagoPk){alert("No se encontró el registro de pago.");return;}
+      eliminarPagoOcurrencia(pagoPk.id);
+    } else {
+      desactivar(fe.id);
+    }
+  }}>🗑</button>
             </div>
           </div>
         ))
@@ -1463,7 +1478,7 @@ function ModalConfirmarComision({ comision, onSave, onClose }) {
     return `${n[parseInt(m)-1]} ${y}`;
   };
   return(
-    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="moverlay" >
       <div className="modal" style={{maxWidth:440}}>
         <div className="mhdr"><div className="mtitle">✅ Confirmar Pago de Comisión</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div style={{background:"var(--s2)",borderRadius:8,padding:"12px 14px",marginBottom:16}}>
@@ -1494,7 +1509,7 @@ function ModalConfirmarComision({ comision, onSave, onClose }) {
 function ModalConfirmarPagoInstructor({ pago, onSave, onClose }) {
   const [fecha,setFecha]=useState(todayStr());
   return(
-    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="moverlay" >
       <div className="modal" style={{maxWidth:440}}>
         <div className="mhdr"><div className="mtitle">✅ Confirmar Pago a Instructor</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div style={{background:"var(--s2)",borderRadius:8,padding:"12px 14px",marginBottom:16}}>
@@ -1686,7 +1701,7 @@ function ModalEditarGasto({ pago, onSave, onClose }) {
   const [f,setF]=useState({...pago, _fecha: pago.fecha||pago.date||todayStr()});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   return(
-    <div className="moverlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="moverlay" >
       <div className="modal" style={{maxWidth:440}}>
         <div className="mhdr"><div className="mtitle">✏️ Editar Gasto</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div className="fgrid">

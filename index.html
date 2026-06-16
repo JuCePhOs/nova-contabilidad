@@ -2196,6 +2196,7 @@ function App() {
   const [crmSource,setCrmSource]=useState(null);
   const [loaded,setLoaded]=useState(false);
   const [showRem,setShowRem]=useState(false);
+  const [excludedCrmFolios,setExcludedCrmFolios]=useState([]);
   // Custom expense categories
   const [expenseCats,setExpenseCats]=useState(DEFAULT_EXPENSE_CATS);
   // Currency
@@ -2222,6 +2223,7 @@ function App() {
           setIngresos(d.ingresos||[]);
           setGastosFijos(d.gastosFijos||[]);
           setPagosGastos(d.pagosGastos||[]);
+          setExcludedCrmFolios(d.excludedCrmFolios||[]);
           if(d.expenseCats&&d.expenseCats.length) setExpenseCats(d.expenseCats);
           try{
             localStorage.setItem("acad_v1_ingresos",JSON.stringify(d.ingresos||[]));
@@ -2299,6 +2301,31 @@ function App() {
     setCrmSource(c?._source||null);
   }
 
+  async function editarIngreso(inc,id){
+    const upd=ingresos.map(i=>i.id===id?{...inc,id}:i);
+    setIngresos(upd); await stor("set","ingresos",upd);
+  }
+  async function eliminarIngresoHist(id){
+    const entry=ingresos.find(i=>i.id===id);
+    // Si es un ingreso auto-sincronizado, añadir su crmFolio a la lista de exclusión
+    // para que el auto-sync no lo vuelva a crear inmediatamente.
+    if(entry?.autoSync && entry?.crmFolio){
+      const newExcl=[...(excludedCrmFolios||[]), String(entry.crmFolio)];
+      setExcludedCrmFolios(newExcl);
+      await stor("set","excludedCrmFolios",newExcl);
+    }
+    const upd=ingresos.filter(i=>i.id!==id);
+    setIngresos(upd); await stor("set","ingresos",upd);
+  }
+  async function editarPagoGastoHist(pago){
+    const upd=pagosGastos.map(p=>p.id===pago.id?pago:p);
+    setPagosGastos(upd); await stor("set","pagosGastos",upd);
+  }
+  async function eliminarPagoGastoHist(id){
+    const upd=pagosGastos.filter(p=>p.id!==id);
+    setPagosGastos(upd); await stor("set","pagosGastos",upd);
+  }
+
   const upcoming=useMemo(()=>{
     if(!loaded) return [];
     const hoyISO=todayStr();
@@ -2331,7 +2358,8 @@ function App() {
     const existentes = new Set(ingresos.filter(i=>i.crmFolio).map(i=>String(i.crmFolio)));
 
     // Nuevos: pagos del CRM que aún no tienen un ingreso correspondiente
-    const nuevos = pagosReg.filter(p=>p.crmFolio!=null && !existentes.has(String(p.crmFolio)));
+    const excluidos = new Set((excludedCrmFolios||[]).map(String));
+    const nuevos = pagosReg.filter(p=>p.crmFolio!=null && !existentes.has(String(p.crmFolio)) && !excluidos.has(String(p.crmFolio)));
     const creados = nuevos.map(p=>({
       id: uid(),
       date: (p.fechaISO||p.fecha||todayStr()).slice(0,10),
@@ -2356,7 +2384,7 @@ function App() {
     const upd=[...ingresos.filter(i=>!huerfanoIds.has(i.id)), ...creados];
     setIngresos(upd);
     stor("set","ingresos",upd);
-  },[crmData, ingresos, loaded]);
+  },[crmData, ingresos, loaded, excludedCrmFolios]);
 
   const TABS=[
     {id:"dashboard",icon:"🏠",label:"Inicio"},

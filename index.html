@@ -224,17 +224,21 @@ function calcPagosInstructores(crmData){
   const sesiones = crmData?.sesionesClase||[];
   const cm = monthStr();
   return instructores.filter(p=>p.activo!==false).map(p=>{
-    let horas=0;
+    let hP=0, hA=0;
     sesiones.forEach(s=>{
       if(s.mes!==cm) return;
-      if(s.instructorId===p.id&&s.estadoP==='finalizada') horas+=(s.horasInstructor||0);
-      if(s.asistenteId===p.id&&s.estadoA==='finalizada') horas+=(s.horasAsistente||0);
+      if(s.instructorId===p.id&&s.estadoP==='finalizada') hP+=(s.horasInstructor||0);
+      if(s.asistenteId===p.id&&s.estadoA==='finalizada') hA+=(s.horasAsistente||0);
       if(s.estado==='finalizada'&&!s.estadoP&&!s.estadoA){
-        if(s.instructorId===p.id) horas+=(s.horasInstructor||0);
-        if(s.asistenteId===p.id) horas+=(s.horasAsistente||0);
+        if(s.instructorId===p.id) hP+=(s.horasInstructor||0);
+        if(s.asistenteId===p.id) hA+=(s.horasAsistente||0);
       }
     });
-    return {id:p.id, nombre:p.nombre, horas:+horas.toFixed(2), tarifaHora:p.tarifaHora||0, monto:+(horas*(p.tarifaHora||0)).toFixed(2), mes:cm};
+    const tarifaA = p.tarifaHoraAsistente||p.tarifaHora||0;
+    const monto = +(hP*(p.tarifaHora||0) + hA*tarifaA).toFixed(2);
+    const horas = +(hP+hA).toFixed(2);
+    return {id:p.id, nombre:p.nombre, horas, hPrincipal:+hP.toFixed(2), hAsistente:+hA.toFixed(2),
+      tarifaHora:p.tarifaHora||0, tarifaHoraAsistente:tarifaA, monto, mes:cm};
   }).filter(r=>r.monto>0);
 }
 
@@ -1530,7 +1534,10 @@ function ModalConfirmarPagoInstructor({ pago, onSave, onClose }) {
         <div className="mhdr"><div className="mtitle">✅ Confirmar Pago a Instructor</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div style={{background:"var(--s2)",borderRadius:8,padding:"12px 14px",marginBottom:16}}>
           <div style={{fontSize:15,fontWeight:700}}>{pago.nombre}</div>
-          <div style={{fontSize:12,color:"var(--tx2)",marginTop:3}}>{pago.horas} hrs × {fmt$(pago.tarifaHora)}/hr</div>
+          <div style={{fontSize:12,color:"var(--tx2)",marginTop:3}}>
+            {pago.hPrincipal>0&&<div>👨‍🏫 Principal: {pago.hPrincipal} hrs × {fmt$(pago.tarifaHora)}/hr</div>}
+            {pago.hAsistente>0&&<div>🤝 Asistente: {pago.hAsistente} hrs × {fmt$(pago.tarifaHoraAsistente)}/hr</div>}
+          </div>
           <div className="mono" style={{fontSize:22,fontWeight:800,marginTop:8,color:"var(--gr)"}}>{fmt$(pago.monto)}</div>
         </div>
         <div className="fgrid">
@@ -1570,8 +1577,11 @@ function ComisionesEmpleados({ crmData, pagosGastos, setPagosGastos, showMoney }
     return pagosGastos.find(p=>p.cat==="Pago Instructores"&&p.instructorId===r.id&&p.mes===r.mes);
   }
   async function confirmarPagoInstructor(r,fecha){
+    const partes=[];
+    if(r.hPrincipal>0) partes.push(`${r.hPrincipal}h Principal × ${fmt$(r.tarifaHora)}`);
+    if(r.hAsistente>0) partes.push(`${r.hAsistente}h Asistente × ${fmt$(r.tarifaHoraAsistente)}`);
     const pago={id:uid(),gastoId:null,
-      desc:`Pago instructor — ${r.nombre} (${r.horas} hrs × ${fmt$(r.tarifaHora)}/hr)`,
+      desc:`Pago instructor — ${r.nombre} (${partes.join(" + ")})`,
       monto:r.monto, fecha, date:fecha, mes:r.mes, cat:"Pago Instructores", notas:"",
       createdAt:new Date().toISOString(), instructorId:r.id};
     const upd=[...pagosGastos,pago];
@@ -1690,8 +1700,8 @@ function ComisionesEmpleados({ crmData, pagosGastos, setPagosGastos, showMoney }
                   {pagado?<span className="badge b-gr">✓ Pagado</span>:<span className="badge b-am">⏳ Pendiente</span>}
                 </div>
                 <div style={{fontSize:11,color:"var(--tx2)",marginTop:5,display:"flex",gap:12,flexWrap:"wrap"}}>
-                  <span>⏱ {r.horas} hrs</span>
-                  <span>💵 {fmt$(r.tarifaHora)}/hr</span>
+                  {r.hPrincipal>0&&<span>👨‍🏫 {r.hPrincipal} hrs × {fmt$(r.tarifaHora)}</span>}
+                  {r.hAsistente>0&&<span>🤝 {r.hAsistente} hrs × {fmt$(r.tarifaHoraAsistente)}</span>}
                   {pagado&&<span style={{color:"var(--gr)"}}>🗓 Pagado el {fmtD(pagado.fecha)}</span>}
                 </div>
               </div>
@@ -1728,7 +1738,12 @@ function ModalEditarGasto({ pago, onSave, onClose }) {
         </div>
         <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:18}}>
           <button className="btn btn-o" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-p" onClick={()=>onSave({...f,monto:parseFloat(f.monto)||0,fecha:f._fecha,date:f._fecha})}>✓ Guardar</button>
+          <button className="btn btn-p" onClick={()=>{
+            const upd={...f,monto:parseFloat(f.monto)||0,fecha:f._fecha,date:f._fecha};
+            // Si este pago pertenece a una ocurrencia semanal, sincronizar la fecha de esa ocurrencia también
+            if(upd.ocurrencia) upd.ocurrencia=f._fecha;
+            onSave(upd);
+          }}>✓ Guardar</button>
         </div>
       </div>
     </div>
@@ -2098,7 +2113,13 @@ function Pronostico({ crmData, ingresos, pagosGastos, gastosFijos }) {
     },0);
 
   // Fixed expenses for a month
-  const gastosFijosMes=(ym)=>gastosFijos.filter(g=>g.active).reduce((s,g)=>s+g.monto,0);
+  const gastosFijosMes=(ym)=>gastosFijos.filter(g=>g.active).reduce((s,g)=>{
+    // Cuenta las ocurrencias REALES de ese gasto en el mes `ym` (respeta semanal×N veces y fechas omitidas),
+    // en vez de sumar el monto base una sola vez sin importar el mes solicitado.
+    const skipped=new Set(g.skippedDates||[]);
+    const ocs=ocurrenciasGasto(g,ym).filter(fecha=>!skipped.has(fecha));
+    return s+ocs.length*g.monto;
+  },0);
 
   // Timeline data
   const timeline = useMemo(()=>meses.map(ym=>({

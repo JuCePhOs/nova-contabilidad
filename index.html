@@ -270,10 +270,15 @@ function calcPagosInstructores(crmData) {
   const cm = monthStr();
   return instructores.filter((p) => p.activo !== false).map((p) => {
     let hP = 0, hA = 0;
+    // p.id es el id en la tabla "instructores"; p.userId es el id en la tabla "usuarios"
+    // (cuando el instructor tiene cuenta propia de login). Un bug ya corregido en el CRM
+    // (reanudarClaseHorario) podía guardar sesiones con el id de usuario en vez del de
+    // instructor — se revisan ambos para no perder horas ya registradas con esa mezcla.
+    const altId = p.userId || null;
     sesiones.forEach((s) => {
       if (s.mes !== cm) return;
-      if (s.instructorId === p.id && s.estadoP === "finalizada") hP += s.horasInstructor || 0;
-      if (s.asistenteId === p.id && s.estadoA === "finalizada") hA += s.horasAsistente || 0;
+      if ((s.instructorId === p.id || (altId && s.instructorId === altId)) && s.estadoP === "finalizada") hP += s.horasInstructor || 0;
+      if ((s.asistenteId === p.id || (altId && s.asistenteId === altId)) && s.estadoA === "finalizada") hA += s.horasAsistente || 0;
       if (s.estado === "finalizada" && !s.estadoP && !s.estadoA) {
         if (s.instructorId === p.id) hP += s.horasInstructor || 0;
         if (s.asistenteId === p.id) hA += s.horasAsistente || 0;

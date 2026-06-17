@@ -613,7 +613,8 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
   const gastoT = gastMes.reduce((s, g) => s + g.monto, 0);
   const balance = neto - gastoT;
   const pendAmt = gastosFijos.filter((fe) => fe.active).reduce((s, fe) => {
-    const pend = ocurrenciasGasto(fe, monthStr()).filter((fecha) => !pagoDeOcurrencia(fe, fecha, pagosGastos2));
+    const skippedPend = new Set(fe.skippedDates || []);
+    const pend = ocurrenciasGasto(fe, monthStr()).filter((fecha) => !skippedPend.has(fecha) && !pagoDeOcurrencia(fe, fecha, pagosGastos2));
     return s + pend.length * fe.monto;
   }, 0);
   const chartData = useMemo(() => {
@@ -1551,8 +1552,10 @@ function App() {
     const cmNow = monthStr();
     const out = [];
     gastosFijos.filter((fe) => fe.active).forEach((fe) => {
+      const skippedUp = new Set(fe.skippedDates || []);
       [cmNow, nextMonth(cmNow)].forEach((ym) => {
         ocurrenciasGasto(fe, ym).forEach((fecha) => {
+          if (skippedUp.has(fecha)) return;
           if (pagoDeOcurrencia(fe, fecha, pagosGastos2)) return;
           const diff = Math.round((/* @__PURE__ */ new Date(fecha + "T00:00:00") - /* @__PURE__ */ new Date(hoyISO + "T00:00:00")) / 864e5);
           if (diff <= 7) out.push({ ...fe, _fecha: fecha, daysUntilDue: diff, isOverdue: diff < 0, isDueSoon: diff >= 0 && diff <= 7 });

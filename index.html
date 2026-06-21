@@ -1715,10 +1715,15 @@ function App() {
   useEffect(() => {
     if (!loaded) return;
     const pagosReg = (crmData == null ? void 0 : crmData.pagosRegulares) || [];
-    const pagosFolios = new Set(pagosReg.filter((p) => p.crmFolio != null).map((p) => String(p.crmFolio)));
-    const existentes = new Set(ingresos.filter((i) => i.crmFolio).map((i) => String(i.crmFolio)));
+    // FIX: clave compuesta folio+meses — antes se deduplicaba SOLO por crmFolio, lo que
+    // causaba que en cuanto UN pago de un folio se sincronizaba (p.ej. el de mayo), TODOS
+    // los pagos posteriores de ESE MISMO folio (p.ej. el de junio) se ignoraran para siempre,
+    // porque el sistema creía que "ese folio ya tiene un ingreso" sin importar el mes.
+    const syncKey = (p) => String(p.crmFolio) + "|" + (p.meses || []).slice().sort().join(",");
+    const pagosKeys = new Set(pagosReg.filter((p) => p.crmFolio != null).map(syncKey));
+    const existentes = new Set(ingresos.filter((i) => i.crmFolio).map((i) => String(i.crmFolio) + "|" + (i.mesesPago || []).slice().sort().join(",")));
     const excluidos = new Set((excludedCrmFolios || []).map(String));
-    const nuevos = pagosReg.filter((p) => p.crmFolio != null && !existentes.has(String(p.crmFolio)) && !excluidos.has(String(p.crmFolio)));
+    const nuevos = pagosReg.filter((p) => p.crmFolio != null && !existentes.has(syncKey(p)) && !excluidos.has(String(p.crmFolio) + "|" + (p.meses || []).slice().sort().join(",")));
     const creados = nuevos.map((p) => {
       var _a;
       return {
@@ -1728,6 +1733,7 @@ function App() {
         alumno: p.alumnoNombre || "",
         cursoRef: p.curso || "",
         crmFolio: String(p.crmFolio),
+        mesesPago: p.meses || [],
         monto: p.montoFinal || 0,
         method: p.method || "cash",
         cat: "Mensualidad",
@@ -1740,7 +1746,7 @@ function App() {
         autoSync: true
       };
     });
-    const huerfanos = ingresos.filter((i) => i.autoSync && i.crmFolio && !pagosFolios.has(String(i.crmFolio)));
+    const huerfanos = ingresos.filter((i) => i.autoSync && i.crmFolio && !pagosKeys.has(String(i.crmFolio) + "|" + (i.mesesPago || []).slice().sort().join(",")));
     if (nuevos.length === 0 && huerfanos.length === 0) return;
     const huerfanoIds = new Set(huerfanos.map((i) => i.id));
     const upd = [...ingresos.filter((i) => !huerfanoIds.has(i.id)), ...creados];

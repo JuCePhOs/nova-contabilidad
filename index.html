@@ -1741,13 +1741,13 @@ function App() {
       };
     });
     const huerfanos = ingresos.filter((i) => i.autoSync && i.crmFolio && !pagosFolios.has(String(i.crmFolio)));
-    // FIX: detectar ingresos que ya existen pero cuyo pago en CRM fue editado
-    // (guardarEdicionPago establece editadoEn en el pago; comparamos con _editadoEn en el ingreso)
+    // FIX: detectar y actualizar ingresos cuyo pago fue editado en CRM
+    // guardarEdicionPago() marca editadoEn; lo comparamos con _editadoEn del ingreso
     const porActualizar = pagosReg.filter((p) => {
       if (p.crmFolio == null) return false;
-      if (!existentes.has(String(p.crmFolio))) return false; // aún no sincronizado → va a creados
+      if (!existentes.has(String(p.crmFolio))) return false;
       if (excluidos.has(String(p.crmFolio))) return false;
-      if (!p.editadoEn) return false; // nunca fue editado desde el modal de edición
+      if (!p.editadoEn) return false;
       const ingreso = ingresos.find((i) => i.crmFolio === String(p.crmFolio) && i.autoSync);
       if (!ingreso) return false;
       return !ingreso._editadoEn || ingreso._editadoEn !== p.editadoEn;
@@ -1760,7 +1760,7 @@ function App() {
         actualizadosMap[ingreso.id] = {
           ...ingreso,
           date: (p.fechaISO || p.fecha || ingreso.date || "").slice(0, 10),
-          desc: (p.curso || "") + (p.notas ? ` \u2014 ${p.notas}` : ""),
+          desc: (p.curso || "") + (p.notas ? " — " + p.notas : ""),
           alumno: p.alumnoNombre || ingreso.alumno || "",
           cursoRef: p.curso || ingreso.cursoRef || "",
           monto: p.montoFinal || 0,

@@ -1847,10 +1847,19 @@ function App() {
       // Detectar edición via editadoEn
       if (p.editadoEn && (!ingreso._editadoEn || ingreso._editadoEn !== p.editadoEn)) return true;
       // CLAVE PARA FOLIO 1044: detectar ingreso fantasma por monto diferente.
-      // guardarPago() no setea editadoEn, así que la única forma de detectar
-      // que el ingreso está desactualizado es comparar el monto.
-      const montoEsperado = (p.paqueteFolios && p.paqueteFolios.length > 1 && !p.paqueteSlave && p.paqueteTotal)
-        ? p.paqueteTotal : (p.montoFinal || 0);
+      // Para paquetes: el monto esperado es la SUMA de todos los pagos del paquete
+      // (después de repararPagosPaquete cada folio vale $1500, suma = $4500).
+      const foliosArrPA = Array.isArray(p.paqueteFolios) ? p.paqueteFolios : Object.values(p.paqueteFolios || {});
+      const isPaquetePA = foliosArrPA && foliosArrPA.length > 1;
+      let montoEsperado = p.montoFinal || 0;
+      if (isPaquetePA) {
+        const keyPA = [...foliosArrPA].sort((a, b) => Number(a) - Number(b)).join(",");
+        const allPkgPA = pagosReg.filter((pp) => {
+          const fa2 = Array.isArray(pp.paqueteFolios) ? pp.paqueteFolios : Object.values(pp.paqueteFolios || {});
+          return fa2 && fa2.length > 1 && [...fa2].sort((a, b) => Number(a) - Number(b)).join(",") === keyPA;
+        });
+        montoEsperado = allPkgPA.reduce((s, pp) => s + (pp.montoFinal || 0), 0) || p.montoFinal || 0;
+      }
       if (ingreso.monto !== montoEsperado) return true;
       return false;
     });

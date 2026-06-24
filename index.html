@@ -1660,13 +1660,60 @@ function App() {
   async function eliminarIngresoHist(id) {
     const entry = ingresos.find((i) => i.id === id);
     if ((entry == null ? void 0 : entry.autoSync) && (entry == null ? void 0 : entry.crmFolio)) {
-      const newExcl = [...excludedCrmFolios || [], String(entry.crmFolio)];
-      setExcludedCrmFolios(newExcl);
-      await stor("set", "excludedCrmFolios", newExcl);
+      // FIX: preguntar antes de excluir. Si el usuario solo quiere corregir un error,
+      // no debe quedar bloqueado el re-sync de este folio permanentemente.
+      const bloquear = confirm(
+        "Este ingreso viene del CRM (folio #" + entry.crmFolio + ").\n\n" +
+        "¿Quieres BLOQUEAR que vuelva a sincronizarse desde CRM?\n\n" +
+        "• SÍ: se elimina y no vuelve a aparecer aunque el pago exista en CRM.\n" +
+        "• NO: se elimina pero se re-sincronizará automáticamente si el pago sigue en CRM."
+      );
+      if (bloquear) {
+        const newExcl = [...excludedCrmFolios || [], String(entry.crmFolio)];
+        setExcludedCrmFolios(newExcl);
+        await stor("set", "excludedCrmFolios", newExcl);
+      }
     }
     const upd = ingresos.filter((i) => i.id !== id);
     setIngresos(upd);
     await stor("set", "ingresos", upd);
+  }
+  async function forzarResyncFolio() {
+    const input = prompt("Ingresa el folio a re-sincronizar desde CRM:\n(Borra el ingreso actual en Contabilidad y lo recrea desde CRM)");
+    if (!input) return;
+    const folioStr = String(parseInt(input.trim()));
+    if (isNaN(parseInt(folioStr))) { alert("Folio no válido."); return; }
+    const ingresoPrevio = ingresos.find(i => String(i.crmFolio) === folioStr && i.autoSync);
+    if (!ingresoPrevio) { alert("Folio #" + folioStr + " no tiene ingreso autoSync.\nSi el pago existe en CRM aparecerá en el próximo ciclo."); return; }
+    if (!confirm("¿Eliminar el ingreso actual del folio #" + folioStr + " ($" + (ingresoPrevio.monto||0).toLocaleString('es-MX') + ") y recrearlo desde CRM?\n\nNO se bloqueará — volverá a aparecer automáticamente.")) return;
+    const newIngresos = ingresos.filter(i => !(String(i.crmFolio) === folioStr && i.autoSync));
+    setIngresos(newIngresos);
+    await stor("set", "ingresos", newIngresos);
+    const newExcl = (excludedCrmFolios || []).filter(f => String(f) !== folioStr);
+    if (newExcl.length !== (excludedCrmFolios||[]).length) {
+      setExcludedCrmFolios(newExcl); await stor("set", "excludedCrmFolios", newExcl);
+    }
+    alert("✅ Ingreso eliminado y folio desbloqueado. El pago de CRM aparecerá en ~30 segundos o al recargar.");
+  }
+  async function limpiarExclusionFolio(folioInput) {
+    const lista = (excludedCrmFolios || []);
+    let input = folioInput;
+    if (!input) {
+      input = prompt(
+        (lista.length ? "Folios bloqueados del sync CRM: " + lista.join(", ") : "Sin folios bloqueados.") +
+        "\n\nEscribe el número de folio que quieres desbloquear:"
+      );
+    }
+    if (!input) return;
+    const folioStr = String(parseInt(String(input).trim()));
+    if (isNaN(parseInt(folioStr))) { alert("Folio no válido."); return; }
+    if (!lista.map(String).includes(folioStr)) {
+      alert("El folio " + folioStr + " no está bloqueado."); return;
+    }
+    const newExcl = lista.filter(f => String(f) !== folioStr);
+    setExcludedCrmFolios(newExcl);
+    await stor("set", "excludedCrmFolios", newExcl);
+    alert("✅ Folio #" + folioStr + " desbloqueado.\nEl pago aparecerá en Contabilidad en el próximo ciclo de sincronización.");
   }
   async function editarPagoGastoHist(pago) {
     const upd = pagosGastos2.map((p) => p.id === pago.id ? pago : p);
@@ -1718,23 +1765,31 @@ function App() {
     const pagosFolios = new Set(pagosReg.filter((p) => p.crmFolio != null).map((p) => String(p.crmFolio)));
     const existentes = new Set(ingresos.filter((i) => i.crmFolio).map((i) => String(i.crmFolio)));
     const excluidos = new Set((excludedCrmFolios || []).map(String));
-    const nuevos = pagosReg.filter((p) => p.crmFolio != null && !existentes.has(String(p.crmFolio)) && !excluidos.has(String(p.crmFolio)));
+    // FIX: excluir paqueteSlave (representados por el master con el total completo del paquete)
+    const nuevos = pagosReg.filter((p) => p.crmFolio != null && !existentes.has(String(p.crmFolio)) && !excluidos.has(String(p.crmFolio)) && p.paqueteSlave !== true);
     const creados = nuevos.map((p) => {
       var _a;
+      const isPaquete = p.paqueteFolios && p.paqueteFolios.length > 1 && !p.paqueteSlave;
+      const montoIngreso = isPaquete && p.paqueteTotal ? p.paqueteTotal : (p.montoFinal || 0);
+      const descIngreso = isPaquete
+        ? (p.curso || "") + " — Paquete " + p.paqueteFolios.length + " grupos (Folios #" + p.paqueteFolios.join(", #") + ")"
+        : (p.curso || "") + (p.notas ? " — " + p.notas : "");
+      const commIngreso = isPaquete && p.method === "card"
+        ? +(montoIngreso * 0.035 * 1.16).toFixed(2) : (p.commMP || 0) + (p.ivaMP || 0);
       return {
         id: uid(),
         date: (p.fechaISO || p.fecha || todayStr()).slice(0, 10),
-        desc: p.curso + (p.notas ? ` \u2014 ${p.notas}` : ""),
+        desc: descIngreso,
         alumno: p.alumnoNombre || "",
         cursoRef: p.curso || "",
         crmFolio: String(p.crmFolio),
-        monto: p.montoFinal || 0,
+        monto: montoIngreso,
         method: p.method || "cash",
         cat: "Mensualidad",
         notas: p.notas || "",
-        comm: p.commMP || 0,
-        ivaComm: p.ivaMP || 0,
-        totalDed: (p.commMP || 0) + (p.ivaMP || 0),
+        comm: (p.paqueteFolios&&p.paqueteFolios.length>1&&!p.paqueteSlave)?commIngreso:(p.commMP||0),
+        ivaComm: 0,
+        totalDed: commIngreso,
         neto: (_a = p.neto) != null ? _a : p.montoFinal || 0,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         autoSync: true

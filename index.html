@@ -1834,9 +1834,31 @@ function App() {
         autoSync: true
       };
     });
-    const huerfanos = ingresos.filter((i) => i.autoSync && i.crmFolio && !pagosFolios.has(String(i.crmFolio)));
+    const huerfanos = ingresos.filter((i) => (i.autoSync && i.crmFolio && !pagosFolios.has(String(i.crmFolio))) || paqueteOrfanosExtra.has(i.id));
     // FIX: detectar y actualizar ingresos cuyo pago fue editado en CRM
     // guardarEdicionPago() marca editadoEn; lo comparamos con _editadoEn del ingreso
+    // LIMPIEZA DE INGRESOS DUPLICADOS DE PAQUETE
+    // Si hay múltiples ingresos para el mismo paquete (de syncs anteriores rotos),
+    // conservar solo el del folio menor y marcar los demás como huérfanos.
+    const paqueteGruposIngresos = {};
+    ingresos.forEach((ingreso) => {
+      if (!ingreso.autoSync || !ingreso.crmFolio) return;
+      const crmP = pagosReg.find((p) => String(p.crmFolio) === String(ingreso.crmFolio));
+      if (!crmP) return;
+      const fa = Array.isArray(crmP.paqueteFolios) ? crmP.paqueteFolios : Object.values(crmP.paqueteFolios || {});
+      if (!fa || fa.length <= 1) return;
+      const key = [...fa].sort((a, b) => Number(a) - Number(b)).join(",");
+      if (!paqueteGruposIngresos[key]) paqueteGruposIngresos[key] = [];
+      paqueteGruposIngresos[key].push(ingreso);
+    });
+    const paqueteOrfanosExtra = new Set();
+    Object.values(paqueteGruposIngresos).forEach((pkgIngs) => {
+      if (pkgIngs.length <= 1) return;
+      // Ordenar por crmFolio (menor primero = master), marcar el resto para borrar
+      pkgIngs.sort((a, b) => Number(a.crmFolio) - Number(b.crmFolio));
+      pkgIngs.slice(1).forEach((i) => paqueteOrfanosExtra.add(i.id));
+    });
+
     const porActualizar = pagosReg.filter((p) => {
       if (p.crmFolio == null) return false;
       if (!existentes.has(String(p.crmFolio))) return false;
@@ -1844,6 +1866,8 @@ function App() {
       if (p.paqueteSlave === true) return false;
       const ingreso = ingresos.find((i) => i.crmFolio === String(p.crmFolio) && i.autoSync);
       if (!ingreso) return false;
+      // Si este ingreso es un duplicado de paquete marcado para borrar, no actualizar
+      if (paqueteOrfanosExtra.has(ingreso.id)) return false;
       // Detectar edición via editadoEn
       if (p.editadoEn && (!ingreso._editadoEn || ingreso._editadoEn !== p.editadoEn)) return true;
       // CLAVE PARA FOLIO 1044: detectar ingreso fantasma por monto diferente.

@@ -1835,8 +1835,20 @@ function App() {
       const ingreso = ingresos.find((i) => i.crmFolio === String(p.crmFolio) && i.autoSync);
       if (!ingreso) return false;
       if (_paqOrfanos.has(ingreso.id)) return false;
-      // Solo actualizar cuando el pago fue editado explicitamente en CRM
+      // Actualizar si el pago fue editado explícitamente
       if (p.editadoEn && (!ingreso._editadoEn || ingreso._editadoEn !== p.editadoEn)) return true;
+      // SEGURO para paquetes: si el ingreso tiene el montoFinal individual ($1500)
+      // pero debería ser el total del paquete ($4500), actualizar.
+      // Esta comparación es estable porque después del primer update el monto = suma = correcto.
+      var faPA = Array.isArray(p.paqueteFolios) ? p.paqueteFolios : Object.values(p.paqueteFolios || {});
+      if (faPA && faPA.length > 1) {
+        var keyPA = faPA.slice().sort(function(a,b){return Number(a)-Number(b);}).join(",");
+        var sumPA = pagosReg.filter(function(pp){
+          var f2 = Array.isArray(pp.paqueteFolios) ? pp.paqueteFolios : Object.values(pp.paqueteFolios || {});
+          return f2 && f2.length > 1 && f2.slice().sort(function(a,b){return Number(a)-Number(b);}).join(",") === keyPA;
+        }).reduce(function(s,pp){return s + (pp.montoFinal || 0);}, 0);
+        if (sumPA > 0 && ingreso.monto !== sumPA) return true;
+      }
       return false;
     });;
     const actualizadosMap = {};

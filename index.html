@@ -1831,7 +1831,13 @@ function App() {
     const out = [];
     gastosFijos.filter((fe) => fe.active).forEach((fe) => {
       const skippedUp = new Set(fe.skippedDates || []);
-      [cmNow, nextMonth(cmNow)].forEach((ym) => {
+      // Revisar hasta 6 meses atrás + mes actual + mes siguiente
+      // para no perder pagos vencidos de meses anteriores no marcados como pagados
+      const mesesRevisar = [];
+      let _ym = cmNow;
+      for (let _i = 0; _i < 6; _i++) { _ym = prevMonth(_ym); mesesRevisar.unshift(_ym); }
+      mesesRevisar.push(cmNow, nextMonth(cmNow));
+      mesesRevisar.forEach((ym) => {
         ocurrenciasGasto(fe, ym).forEach((fecha) => {
           if (skippedUp.has(fecha)) return;
           if (pagoDeOcurrencia(fe, fecha, pagosGastos2)) return;

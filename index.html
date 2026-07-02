@@ -338,7 +338,13 @@ function calcComisiones(crmData) {
       || (m.pagoTipo === "unico" && !m.autorizacionPendiente && (m.primerPago || 0) > 0);
     if (!pagado) return;
     const fechaRef = m.fechaISO || m.createdAt || cmActual + "-01";
-    const mesGanado = fechaRef.slice(0, 7);
+    const mesCreacion = fechaRef.slice(0, 7);
+    // Buscar pago real registrado en CRM para este folio
+    const pagoReal = pagosReg.find((p) => String(p.crmFolio) === String(m.folio) || String(p.crmFolio) === String(repFolio));
+    // Si hay pago real, usar el mes del pago (puede ser diferente al mes de creación si se pagó tarde)
+    const mesGanado = pagoReal
+      ? ((pagoReal.meses && pagoReal.meses[0]) ? pagoReal.meses[0] : (pagoReal.fechaISO || pagoReal.fecha || mesCreacion).slice(0, 7))
+      : mesCreacion;
     const creador = m.createdBy || "sin_asignar";
     const key = creador + "|" + mesGanado;
     if (!grupos[key]) grupos[key] = { usuario: creador, nombreUsuario: creador === "sin_asignar" ? "Sin asignar" : nombreDe(creador), mesGanado, folios: [] };
@@ -359,7 +365,13 @@ function aplicarOverridesComisiones(rawGroups, overrides, usuarios) {
   (rawGroups || []).forEach((g) => {
     g.folios.forEach((f) => {
       const o = ov[f];
-      if (o && o.excluido) return;
+      if (o && o.excluido) {
+        // Respetar mesOriginal: si el folio se excluyó de un mes específico,
+        // pero ahora aparece en un mes DIFERENTE (por pago tardío), incluirlo
+        const excludeThisMonth = !o.mesOriginal || o.mesOriginal === g.mesGanado;
+        if (excludeThisMonth) return; // sí excluir
+        // Si se movió a otro mes porque se pagó tarde: se incluye en el nuevo mes
+      }
       const usuario = (o && o.reasignadoA) ? o.reasignadoA : g.usuario;
       items.push({ folio: f, usuario, mesGanado: g.mesGanado });
     });
@@ -1160,9 +1172,9 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
   };
   const comisionesRaw = useMemo(() => calcComisiones(crmData), [crmData]);
   const comisiones = useMemo(() => aplicarOverridesComisiones(comisionesRaw, comisionOverrides, crmData?.usuarios || []), [comisionesRaw, comisionOverrides, crmData]);
-  async function excluirFolio(folio) {
+  async function excluirFolio(folio, mesGanado) {
     if (!confirm(`¿Quitar el folio #${folio} de esta comisión? No se pagará comisión por este contrato.`)) return;
-    const upd = { ...comisionOverrides, [folio]: { excluido: true, editadoEn: (/* @__PURE__ */ new Date()).toISOString() } };
+    const upd = { ...comisionOverrides, [folio]: { excluido: true, mesOriginal: mesGanado, editadoEn: (/* @__PURE__ */ new Date()).toISOString() } };
     setComisionOverrides(upd);
     await stor("set", "comisionOverrides", upd);
   }
@@ -1289,7 +1301,7 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
           /* @__PURE__ */ React.createElement("option", { value: "" }, "Reasignar a\u2026"),
           (crmData.usuarios || []).filter((u) => u.username !== c.usuario).map((u) => /* @__PURE__ */ React.createElement("option", { key: u.username, value: u.username }, u.name || u.username))
         ),
-        /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => excluirFolio(f) }, "\u{1F5D1}\uFE0F Quitar")
+        /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => excluirFolio(f, c.mesGanado) }, "\u{1F5D1}\uFE0F Quitar")
       )
     );
   })))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700 } }, disp(c.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, "comisi\u00F3n")), !c.pagado && /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: () => setPagando(c) }, "\u2713 Marcar pagado")))),

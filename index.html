@@ -1685,6 +1685,12 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos 
     const mesStart = new Date(y, m - 1, 1);
     const mesEnd = new Date(y, m, 0);
     return mats2.filter((mat) => {
+      // Pago único = un solo cobro en el mes de inscripción, no recurrente
+      // Solo contar en el pronóstico del mes en que se registró
+      if (mat.pagoTipo === "unico") {
+        const matMes = (mat.fechaISO || "").slice(0, 7);
+        return matMes === ym;
+      }
       const cur = cursos2.find((c) => c.nombre === mat.curso);
       if (!cur) return true;
       const fin = cur.fechaFin ? /* @__PURE__ */ new Date(cur.fechaFin + "T00:00:00") : null;

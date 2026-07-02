@@ -1160,12 +1160,14 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       XLSX.writeFile(wb, `LibroContable_${mes}.xlsx`);
     } catch (e) { alert("Error al exportar: " + e.message); }
   }
-  // Todos los stats: solo MES ACTUAL → cuadra con Pronóstico
-  // Vencidos de meses anteriores se ven como tarjetas rojas pero no suman aquí
+  // MISMA fórmula que Pronóstico: garantiza cuadre exacto
   const conEstadoMesActual = conEstado.filter((e) => e._fecha.slice(0, 7) === cm);
-  const totFijo = conEstadoMesActual.reduce((s, e) => s + e.monto, 0);
-  const totPagado = conEstadoMesActual.filter((e) => e.paid).reduce((s, e) => s + e.monto, 0);
-  const totPend = conEstadoMesActual.filter((e) => !e.paid).reduce((s, e) => s + e.monto, 0);
+  const totFijo = gastosFijos.filter((g) => g.active).reduce((s, g) => {
+    const sk = new Set(g.skippedDates || []);
+    return s + ocurrenciasGasto(g, cm).filter((f) => !sk.has(f)).length * g.monto;
+  }, 0);
+  const totPagado = conEstadoMesActual.filter((e) => !!e.paid).reduce((s, e) => s + e.monto, 0);
+  const totPend = Math.max(0, totFijo - totPagado); // siempre cuadra: totFijo = totPagado + totPend
   const totVencidoAnterior = conEstado.filter((e) => e._mesAnterior && !e.paid).reduce((s, e) => s + e.monto, 0);
   async function handleSave(g) {
     if (g.__addCat) {

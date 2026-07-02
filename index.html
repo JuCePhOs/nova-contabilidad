@@ -1147,7 +1147,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
             `${mN[parseInt(m)-1]} ${y}`,
             `15 de ${mN[parseInt(mp)-1]} ${yp}`,
             c.count,
-            c.folios.join(", "),
+            (c.folios || []).join(", "),
             c.monto,
             c._pagado ? "Pagado" : "Pendiente",
             c._pagado ? (c._pagado.fecha || "") : ""
@@ -1617,8 +1617,15 @@ function Exportar({ ingresos, pagosGastos: pagosGastos2, gastosFijos, crmData })
         ws["!cols"] = [34, 18].map((w) => ({ wch: w }));
         XLSX.utils.book_append_sheet(wb, ws, "Resumen");
         if (inclCRM && (crmData == null ? void 0 : crmData.matr\u00EDculas)) {
-          const alumnos = crmAlumnos(crmData);
-          const rows = [["Alumno", "Curso(s)", "Email", "Folio", "Total Cobrado (MXN)", "Total Neto (MXN)", "# Pagos", "Pag\xF3 este mes"]];
+          // Agrupar matrículas por alumno con todos sus cursos y folios
+          const alumnoMapExp = {};
+          (crmData.matr\u00EDculas || []).forEach((m) => {
+            if (!alumnoMapExp[m.alumno]) alumnoMapExp[m.alumno] = { alumno: m.alumno, email: m.email || "", cursos: [], folios: [] };
+            if (m.curso && !alumnoMapExp[m.alumno].cursos.includes(m.curso)) alumnoMapExp[m.alumno].cursos.push(m.curso);
+            if (m.folio != null) alumnoMapExp[m.alumno].folios.push(m.folio);
+          });
+          const alumnos = Object.values(alumnoMapExp);
+          const rows = [["Alumno", "Curso(s)", "Email", "Folio(s)", "Total Cobrado (MXN)", "Total Neto (MXN)", "# Pagos", "Pag\xF3 este mes"]];
           const cm2 = monthStr();
           const pagadosMes = new Set(ingresos.filter((i) => i.date.startsWith(cm2) && i.alumno).map((i) => i.alumno));
           alumnos.forEach((a) => {
@@ -1627,9 +1634,9 @@ function Exportar({ ingresos, pagosGastos: pagosGastos2, gastosFijos, crmData })
             const neto = fi.reduce((s, i) => s + i.neto, 0);
             rows.push([
               a.alumno,
-              a.cursos.join(", "),
+              (a.cursos || []).join(", "),
               a.email || "",
-              a.folios.join(", "),
+              (a.folios || []).join(", "),
               total,
               neto,
               fi.length,
@@ -2019,7 +2026,7 @@ function App() {
       const isPaquete = p.paqueteFolios && p.paqueteFolios.length > 1 && !p.paqueteSlave;
       const montoIngreso = isPaquete && p.paqueteTotal ? p.paqueteTotal : (p.montoFinal || 0);
       const descIngreso = isPaquete
-        ? (p.curso || "") + " — Paquete " + p.paqueteFolios.length + " grupos (Folios #" + p.paqueteFolios.join(", #") + ")"
+        ? (p.curso || "") + " — Paquete " + p.paqueteFolios.length + " grupos (Folios #" + (p.paqueteFolios || []).join(", #") + ")"
         : (p.curso || "") + (p.notas ? " — " + p.notas : "");
       const commIngreso = isPaquete && p.method === "card"
         ? +(montoIngreso * 0.035 * 1.16).toFixed(2) : (p.commMP || 0) + (p.ivaMP || 0);

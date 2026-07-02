@@ -1160,8 +1160,11 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       XLSX.writeFile(wb, `LibroContable_${mes}.xlsx`);
     } catch (e) { alert("Error al exportar: " + e.message); }
   }
-  const totFijo = conEstado.reduce((s, e) => s + e.monto, 0);
-  const totPagado = conEstado.filter((e) => e.paid).reduce((s, e) => s + e.monto, 0);
+  // totFijo y totPagado: solo MES ACTUAL (para que cuadre con Pronóstico)
+  // totPend: todos los pendientes incluyendo vencidos de meses anteriores
+  const conEstadoMesActual = conEstado.filter((e) => e._fecha.slice(0, 7) === cm);
+  const totFijo = conEstadoMesActual.reduce((s, e) => s + e.monto, 0);
+  const totPagado = conEstadoMesActual.filter((e) => e.paid).reduce((s, e) => s + e.monto, 0);
   const totPend = conEstado.filter((e) => !e.paid).reduce((s, e) => s + e.monto, 0);
   async function handleSave(g) {
     if (g.__addCat) {

@@ -271,7 +271,14 @@ function pagoDeOcurrencia(fe, fechaISO, pagosGastos2) {
   if ((fe.frecuencia || "mensual") === "semanal") {
     return pagosGastos2.find((p) => p.gastoId === fe.id && p.ocurrencia === fechaISO);
   }
-  return pagosGastos2.find((p) => p.gastoId === fe.id && p.mes === fechaISO.slice(0, 7));
+  const occMonth = fechaISO.slice(0, 7);
+  return pagosGastos2.find((p) =>
+    p.gastoId === fe.id && (
+      p.mes === occMonth ||                // pago registrado en el mes correcto (pago a tiempo)
+      p.fecha === fechaISO ||              // fecha exacta de la ocurrencia (pago tardío desde alerta)
+      (p.date && p.date === fechaISO)      // campo date alternativo
+    )
+  );
 }
 function calcPagosInstructores(crmData, mesFiltro) {
   const instructores = (crmData == null ? void 0 : crmData.instructores) || [];
@@ -676,7 +683,7 @@ function MiniPieChart({ data, colors, height = 200 }) {
   });
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", height, justifyContent: "center" } }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 170 170", style: { width: Math.min(height - 30, 170), height: Math.min(height - 30, 170) } }, slices.map((s, i) => /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("path", { d: s.path, fill: s.color, stroke: "var(--bg)", strokeWidth: "1.5" }, /* @__PURE__ */ React.createElement("title", null, `${s.d.name}: ${fmt$(s.d.value)} (${s.pct}%)`)), s.pct >= 6 && /* @__PURE__ */ React.createElement("text", { x: s.labelX, y: s.labelY, textAnchor: "middle", dominantBaseline: "middle", fontSize: "9", fill: "#0a0f1a", fontWeight: "700" }, s.pct, "%")))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "4px 12px", justifyContent: "center", marginTop: 8, fontSize: 11, color: "var(--tx2)", maxWidth: 260 } }, slices.map((s, i) => /* @__PURE__ */ React.createElement("span", { key: i, style: { display: "flex", alignItems: "center", gap: 5 } }, /* @__PURE__ */ React.createElement("span", { style: { width: 9, height: 9, borderRadius: "50%", background: s.color, display: "inline-block" } }), s.d.name, " (", s.pct, "%)"))));
 }
-function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport }) {
+function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport, comisionOverrides }) {
   const cm = monthStr();
   const cmLabel = (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { month: "long", year: "numeric" });
   const [importText, setImportText] = useState("");
@@ -727,7 +734,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
   const Tip = ({ active, payload, label }) => active && (payload == null ? void 0 : payload.length) ? /* @__PURE__ */ React.createElement("div", { className: "ctooltip" }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 5 } }, label), payload.map((p, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { color: p.color } }, p.name, ": ", fmt$(p.value)))) : null;
   return /* @__PURE__ */ React.createElement("div", null, upcoming.length > 0 && /* @__PURE__ */ React.createElement("div", { className: `alert ${upcoming.some((p) => p.isOverdue) ? "al-rd" : "al-am"}`, style: { cursor: "pointer" }, onClick: () => setTab("gastos") }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--tx)" } }, upcoming.filter((p) => p.isOverdue).length > 0 ? `${upcoming.filter((p) => p.isOverdue).length} pago(s) VENCIDO(s) \u2014 Requiere atenci\xF3n` : `${upcoming.length} pago(s) pr\xF3ximo(s) esta semana`), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, marginTop: 2, opacity: 0.85 } }, "Pendiente total: ", fmt$(pendAmt), " \xB7 Clic para ir a Gastos Fijos"))), (() => {
     const cm2 = monthStr();
-    const pend = calcComisiones(crmData).filter((c) => !pagosGastos2.some((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado));
+    const pend = aplicarOverridesComisiones(calcComisiones(crmData), comisionOverrides, (crmData == null ? void 0 : crmData.usuarios) || []).filter((c) => !pagosGastos2.some((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado));
     const total = pend.reduce((s, c) => s + c.monto, 0);
     if (total <= 0) return null;
     const meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -1831,11 +1838,16 @@ function App() {
     const out = [];
     gastosFijos.filter((fe) => fe.active).forEach((fe) => {
       const skippedUp = new Set(fe.skippedDates || []);
-      // Revisar hasta 6 meses atrás + mes actual + mes siguiente
-      // para no perder pagos vencidos de meses anteriores no marcados como pagados
+      // Revisar desde el mes en que se creó el gasto (no antes, para no generar
+      // ocurrencias fantasma de meses cuando el gasto no existía)
+      const _startMonth = fe.createdAt ? fe.createdAt.slice(0, 7) : cmNow;
       const mesesRevisar = [];
       let _ym = cmNow;
-      for (let _i = 0; _i < 6; _i++) { _ym = prevMonth(_ym); mesesRevisar.unshift(_ym); }
+      for (let _i = 0; _i < 24; _i++) { // hasta 24 meses atrás
+        _ym = prevMonth(_ym);
+        if (_ym < _startMonth) break;   // parar cuando lleguemos al mes de creación
+        mesesRevisar.unshift(_ym);
+      }
       mesesRevisar.push(cmNow, nextMonth(cmNow));
       mesesRevisar.forEach((ym) => {
         ocurrenciasGasto(fe, ym).forEach((fecha) => {
@@ -1998,7 +2010,7 @@ function App() {
     ]);
     const mor = crmAlumnos(crmData).filter((a) => !pag.has(a.alumno)).length;
     return mor > 0 ? /* @__PURE__ */ React.createElement("span", { style: { background: "var(--rd)", color: "#fff", borderRadius: 10, fontSize: 9, padding: "1px 5px", marginLeft: 4 } }, mor) : null;
-  })()))), /* @__PURE__ */ React.createElement("div", { className: "cnt" }, tab === "dashboard" && /* @__PURE__ */ React.createElement(Dashboard, { ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport }), tab === "ingresos" && /* @__PURE__ */ React.createElement(Ingresos, { ingresos, setIngresos, crmData, showMoney, onDelete: eliminarIngresoHist }), tab === "alumnos" && /* @__PURE__ */ React.createElement(AlumnosCRM, { crmData, ingresos, setIngresos }), tab === "pronostico" && /* @__PURE__ */ React.createElement(Pronostico, { crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos }), tab === "gastos" && /* @__PURE__ */ React.createElement(GastosFijos, { gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, expenseCats, addExpenseCat, showMoney }), tab === "comisiones" && /* @__PURE__ */ React.createElement(ComisionesEmpleados, { crmData, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, showMoney, comisionOverrides, setComisionOverrides }), tab === "historial" && /* @__PURE__ */ React.createElement(
+  })()))), /* @__PURE__ */ React.createElement("div", { className: "cnt" }, tab === "dashboard" && /* @__PURE__ */ React.createElement(Dashboard, { ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport, comisionOverrides }), tab === "ingresos" && /* @__PURE__ */ React.createElement(Ingresos, { ingresos, setIngresos, crmData, showMoney, onDelete: eliminarIngresoHist }), tab === "alumnos" && /* @__PURE__ */ React.createElement(AlumnosCRM, { crmData, ingresos, setIngresos }), tab === "pronostico" && /* @__PURE__ */ React.createElement(Pronostico, { crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos }), tab === "gastos" && /* @__PURE__ */ React.createElement(GastosFijos, { gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, expenseCats, addExpenseCat, showMoney }), tab === "comisiones" && /* @__PURE__ */ React.createElement(ComisionesEmpleados, { crmData, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, showMoney, comisionOverrides, setComisionOverrides }), tab === "historial" && /* @__PURE__ */ React.createElement(
     Historial,
     {
       ingresos,

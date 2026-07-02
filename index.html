@@ -1748,8 +1748,9 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
   const totalReal = ingresoReal(mesSel);
   // Para el mes seleccionado: gastos fijos + comisiones pendientes + vencidos anteriores (misma lógica que Gastos Fijos)
   const totalGastos = (() => {
+    const cmNow = monthStr(); // no usar cm (TDZ — se declara después)
     const base = gastosFijosMes(mesSel);
-    if (mesSel !== cm) return base; // solo para mes actual incluir extras
+    if (mesSel !== cmNow) return base; // solo para mes actual incluir extras
     // Comisiones pendientes del mes actual
     const comRaw = crmData ? calcComisiones(crmData) : [];
     const comAjust = crmData ? aplicarOverridesComisiones(comRaw, comisionOverrides, crmData.usuarios || []) : [];
@@ -1759,8 +1760,8 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
     let vencidos = 0;
     gastosFijos.filter((g) => g.active).forEach((g) => {
       const sk = new Set(g.skippedDates || []);
-      const startM = g.createdAt ? g.createdAt.slice(0, 7) : cm;
-      let ym2 = cm;
+      const startM = g.createdAt ? g.createdAt.slice(0, 7) : cmNow;
+      let ym2 = cmNow;
       for (let i = 0; i < 24; i++) {
         ym2 = prevMonth(ym2);
         if (ym2 < startM) break;

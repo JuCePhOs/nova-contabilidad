@@ -1029,7 +1029,7 @@ function ModalGastoExtraordinario({ expenseCats, pagosGastos: pagosGastos2, setP
   }
   return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 460 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u26A1 Gasto Extraordinario"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginBottom: 14, lineHeight: 1.5 } }, "Gasto puntual no contemplado en el presupuesto mensual (reparaci\xF3n, equipo, evento, etc.)."), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Descripci\xF3n"), /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "ej. Reparaci\xF3n de computadora", value: f.desc, onChange: (e) => set("desc", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Monto"), /* @__PURE__ */ React.createElement("input", { className: "finp mono", type: "number", min: "0", step: "0.01", placeholder: "0.00", value: f.monto, onChange: (e) => set("monto", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: f.fecha, onChange: (e) => set("fecha", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Categor\xEDa"), /* @__PURE__ */ React.createElement("select", { className: "finp", value: f.cat, onChange: (e) => set("cat", e.target.value) }, (expenseCats || []).map((c) => /* @__PURE__ */ React.createElement("option", { key: c }, c)), /* @__PURE__ */ React.createElement("option", { value: "Extraordinario" }, "Extraordinario"))), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Notas"), /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "Referencia, proveedor, justificaci\xF3n\u2026", value: f.notas, onChange: (e) => set("notas", e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: guardar }, "\u26A1 Registrar gasto"))));
 }
-function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, expenseCats, addExpenseCat, showMoney }) {
+function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, expenseCats, addExpenseCat, showMoney, crmData, comisionOverrides, ingresos }) {
   const cats = expenseCats || DEFAULT_EXPENSE_CATS;
   const [showForm, setShowForm] = useState(false);
   const [editando, setEditando] = useState(null);
@@ -1059,6 +1059,90 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
     });
   }, [gastosFijos, pagosGastos2, cm]);
   const conEstadoFiltrado = filtroG === "todos" ? conEstado : filtroG === "pendientes" ? conEstado.filter((fe) => !fe.paid) : conEstado.filter((fe) => !!fe.paid);
+  // Comisiones pendientes — visibles en Todos y Pendientes
+  const comisionesItems = useMemo(() => {
+    if (!crmData) return [];
+    const raw = calcComisiones(crmData);
+    const ajustadas = aplicarOverridesComisiones(raw, comisionOverrides, crmData.usuarios || []);
+    return ajustadas.map((c) => ({
+      ...c,
+      _tipo: "comision",
+      _pagado: pagosGastos2.find((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado) || null
+    }));
+  }, [crmData, comisionOverrides, pagosGastos2]);
+  const comisionesFiltradas = filtroG === "todos" ? comisionesItems
+    : filtroG === "pendientes" ? comisionesItems.filter((c) => !c._pagado)
+    : comisionesItems.filter((c) => !!c._pagado);
+  // Función export libro contable mensual
+  function exportarLibroContable() {
+    try {
+      const wb = XLSX.utils.book_new();
+      const mes = monthStr();
+      const mesLbl = (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { month: "long", year: "numeric" });
+      // Hoja 1: Libro mayor del mes
+      const incMes = (ingresos || []).filter((i) => (i.date || "").startsWith(mes));
+      const gstMes = pagosGastos2.filter((g) => gastoEnMes(g, mes));
+      const rows = [
+        ["LIBRO CONTABLE — ACADEMIA DE COMPUTACIÓN — " + mesLbl.toUpperCase()],
+        [],
+        ["Fecha", "Tipo", "Concepto", "Alumno / Detalles", "Categoría", "Ingreso (Haber)", "Gasto (Debe)", "Neto en cuenta"],
+      ];
+      let saldo = 0;
+      const lineas = [
+        ...incMes.map((i) => ({ fecha: i.date, tipo: "Ingreso", desc: i.desc, sub: i.alumno || "", cat: i.cat, haber: i.neto, debe: 0 })),
+        ...gstMes.map((g) => ({ fecha: g.fecha || g.date, tipo: "Gasto", desc: g.desc, sub: g.notas || "", cat: g.cat, haber: 0, debe: g.monto })),
+      ].sort((a, b) => (a.fecha || "").localeCompare(b.fecha || ""));
+      lineas.forEach((l) => {
+        saldo += l.haber - l.debe;
+        rows.push([l.fecha, l.tipo, l.desc, l.sub, l.cat, l.haber || "", l.debe || "", saldo.toFixed(2)]);
+      });
+      rows.push([]);
+      rows.push(["TOTALES", "", "", "", "",
+        incMes.reduce((s, i) => s + i.neto, 0),
+        gstMes.reduce((s, g) => s + g.monto, 0),
+        (incMes.reduce((s, i) => s + i.neto, 0) - gstMes.reduce((s, g) => s + g.monto, 0)).toFixed(2)]);
+      const ws1 = XLSX.utils.aoa_to_sheet(rows);
+      ws1["!cols"] = [10, 8, 32, 24, 16, 14, 14, 14].map((w) => ({ wch: w }));
+      XLSX.utils.book_append_sheet(wb, ws1, "Libro Mayor");
+      // Hoja 2: Gastos fijos (pendientes + pagados del mes)
+      const gfRows = [
+        ["Concepto", "Categoría", "Día pago", "Monto", "Estado", "Fecha pagada", "Notas"],
+      ];
+      conEstado.forEach((fe) => {
+        gfRows.push([fe.desc, fe.cat, fe.dia, fe.monto,
+          fe.paid ? "Pagado" : fe.isOverdue ? "Vencido" : "Pendiente",
+          fe.paid ? fe.paid.fecha : "", fe.paid ? (fe.paid.notas || "") : ""]);
+      });
+      const ws2 = XLSX.utils.aoa_to_sheet(gfRows);
+      ws2["!cols"] = [30, 16, 10, 12, 12, 12, 24].map((w) => ({ wch: w }));
+      XLSX.utils.book_append_sheet(wb, ws2, "Gastos Fijos");
+      // Hoja 3: Comisiones
+      if (comisionesItems.length > 0) {
+        const cRows = [
+          ["Empleado", "Mes ganado", "Fecha a pagar", "Contratos", "Folios", "Monto comisión", "Estado", "Fecha pagada"],
+        ];
+        const mN = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+        comisionesItems.forEach((c) => {
+          const [y, m] = c.mesGanado.split("-");
+          const [yp, mp] = c.mesPago.split("-");
+          cRows.push([
+            c.nombreUsuario,
+            `${mN[parseInt(m)-1]} ${y}`,
+            `15 de ${mN[parseInt(mp)-1]} ${yp}`,
+            c.count,
+            c.folios.join(", "),
+            c.monto,
+            c._pagado ? "Pagado" : "Pendiente",
+            c._pagado ? (c._pagado.fecha || "") : ""
+          ]);
+        });
+        const ws3 = XLSX.utils.aoa_to_sheet(cRows);
+        ws3["!cols"] = [20, 14, 18, 10, 40, 14, 12, 12].map((w) => ({ wch: w }));
+        XLSX.utils.book_append_sheet(wb, ws3, "Comisiones");
+      }
+      XLSX.writeFile(wb, `LibroContable_${mes}.xlsx`);
+    } catch (e) { alert("Error al exportar: " + e.message); }
+  }
   const totFijo = conEstado.reduce((s, e) => s + e.monto, 0);
   const totPagado = conEstado.filter((e) => e.paid).reduce((s, e) => s + e.monto, 0);
   const totPend = conEstado.filter((e) => !e.paid).reduce((s, e) => s + e.monto, 0);
@@ -1113,7 +1197,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
   return /* @__PURE__ */ React.createElement("div", null, showExtraord && /* @__PURE__ */ React.createElement(ModalGastoExtraordinario, { expenseCats: cats, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, onClose: () => setShowExtraord(false) }), (showForm || editando) && /* @__PURE__ */ React.createElement(ModalGastoFijo, { expenseCats: cats, initial: editando || void 0, onSave: handleSave, onClose: () => {
     setShowForm(false);
     setEditando(null);
-  } }), pagando && /* @__PURE__ */ React.createElement(ModalPagarGasto, { gasto: pagando, onSave: (d) => pagar(d, pagando), onClose: () => setPagando(null) }), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4CB} Gastos Fijos"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: () => setShowExtraord(true) }, "\u26A1 Gasto Extraordinario"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: () => setShowForm(true) }, "+ Agregar Gasto Fijo"))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 } }, [{ l: "Total fijo / mes", v: disp(totFijo), c: "var(--tx)" }, { l: "Pagado \u2014 " + (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { month: "short" }), v: disp(totPagado), c: "var(--gr)" }, { l: "Pendiente de pago", v: disp(totPend), c: totPend > 0 ? "var(--rd)" : "var(--tx2)" }].map(({ l, v, c }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat" }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c } }, v)))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginBottom: 8 } }, "Estado \u2014 ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--tx)", textTransform: "capitalize" } }, cmLabel)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" } }, [{ l: "Todos", f: "todos" }, { l: "\u23F3 Pendientes", f: "pendientes" }, { l: "\u2713 Pagados", f: "pagados" }].map(({ l, f }) => /* @__PURE__ */ React.createElement(
+  } }), pagando && /* @__PURE__ */ React.createElement(ModalPagarGasto, { gasto: pagando, onSave: (d) => pagar(d, pagando), onClose: () => setPagando(null) }), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4CB} Gastos Fijos"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: () => setShowExtraord(true) }, "\u26A1 Gasto Extraordinario"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: () => setShowForm(true) }, "+ Agregar Gasto Fijo"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: exportarLibroContable, title: "Exportar libro contable del mes en curso" }, "\u{1F4E5} Exportar mes"))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 } }, [{ l: "Total fijo / mes", v: disp(totFijo), c: "var(--tx)" }, { l: "Pagado \u2014 " + (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { month: "short" }), v: disp(totPagado), c: "var(--gr)" }, { l: "Pendiente de pago", v: disp(totPend), c: totPend > 0 ? "var(--rd)" : "var(--tx2)" }].map(({ l, v, c }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat" }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c } }, v)))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginBottom: 8 } }, "Estado \u2014 ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--tx)", textTransform: "capitalize" } }, cmLabel)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" } }, [{ l: "Todos", f: "todos" }, { l: "\u23F3 Pendientes", f: "pendientes" }, { l: "\u2713 Pagados", f: "pagados" }].map(({ l, f }) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: f,
@@ -1146,7 +1230,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       if (!confirm("\xBFDesactivar este gasto fijo completo?")) return;
       desactivar(fe.id);
     }
-  } }, "\u{1F5D1}")))), gastosFijos.filter((fe) => !fe.active).length > 0 && /* @__PURE__ */ React.createElement("details", { style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("summary", { style: { cursor: "pointer", color: "var(--tx2)", fontSize: 12, padding: "6px 0" } }, "Gastos desactivados (", gastosFijos.filter((fe) => !fe.active).length, ")"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, gastosFijos.filter((fe) => !fe.active).map((fe) => /* @__PURE__ */ React.createElement("div", { key: fe.id, style: { background: "var(--s1)", border: "1px solid var(--br)", borderRadius: 8, padding: "10px 14px", marginBottom: 8, opacity: 0.5, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 500 } }, fe.desc), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { className: "mono", style: { fontSize: 13 } }, fmt$(fe.monto)), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => reactivar(fe.id) }, "Reactivar")))))));
+  } }, "\u{1F5D1}")))), comisionesFiltradas.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--tx2)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 8, display: "flex", alignItems: "center", gap: 8 } }, "\u{1F4BC} Comisiones de empleados", /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 400, color: "var(--tx3)", fontSize: 11 } }, "(— se liquidan el 15 del mes siguiente)")), comisionesFiltradas.map((c) => { const mN = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]; const [y,m] = c.mesGanado.split("-"); const [yp,mp] = c.mesPago.split("-"); return /* @__PURE__ */ React.createElement("div", { key: c.usuario+c.mesGanado, className: "exp-item", style: { borderColor: c._pagado ? "rgba(16,201,138,.4)" : "var(--br)", borderStyle: "dashed" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, c.nombreUsuario), c._pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente"), /* @__PURE__ */ React.createElement("span", { className: "badge b-gy", style: { fontSize: 10 } }, "Comisi\xF3n")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4C5} Contratos de ", mN[parseInt(m)-1], " ", y), /* @__PURE__ */ React.createElement("span", null, "\u{1F4C4} ", c.count, " contrato", c.count!==1?"s":""), c._pagado ? /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F5D3}\uFE0F Pagado el ", fmtD(c._pagado.fecha)) : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F5D3}\uFE0F Pagar el 15 de ", mN[parseInt(mp)-1], " ", yp))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700 } }, fmt$(c.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, "comisi\xF3n"))));})), gastosFijos.filter((fe) => !fe.active).length > 0 && /* @__PURE__ */ React.createElement("details", { style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("summary", { style: { cursor: "pointer", color: "var(--tx2)", fontSize: 12, padding: "6px 0" } }, "Gastos desactivados (", gastosFijos.filter((fe) => !fe.active).length, ")"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, gastosFijos.filter((fe) => !fe.active).map((fe) => /* @__PURE__ */ React.createElement("div", { key: fe.id, style: { background: "var(--s1)", border: "1px solid var(--br)", borderRadius: 8, padding: "10px 14px", marginBottom: 8, opacity: 0.5, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 500 } }, fe.desc), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { className: "mono", style: { fontSize: 13 } }, fmt$(fe.monto)), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => reactivar(fe.id) }, "Reactivar")))))));
 }
 function ModalConfirmarComision({ comision, onSave, onClose }) {
   const [fecha, setFecha] = useState(comision.fechaPagoDefault);
@@ -2023,7 +2107,7 @@ function App() {
     ]);
     const mor = crmAlumnos(crmData).filter((a) => !pag.has(a.alumno)).length;
     return mor > 0 ? /* @__PURE__ */ React.createElement("span", { style: { background: "var(--rd)", color: "#fff", borderRadius: 10, fontSize: 9, padding: "1px 5px", marginLeft: 4 } }, mor) : null;
-  })()))), /* @__PURE__ */ React.createElement("div", { className: "cnt" }, tab === "dashboard" && /* @__PURE__ */ React.createElement(Dashboard, { ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport, comisionOverrides }), tab === "ingresos" && /* @__PURE__ */ React.createElement(Ingresos, { ingresos, setIngresos, crmData, showMoney, onDelete: eliminarIngresoHist }), tab === "alumnos" && /* @__PURE__ */ React.createElement(AlumnosCRM, { crmData, ingresos, setIngresos }), tab === "pronostico" && /* @__PURE__ */ React.createElement(Pronostico, { crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos }), tab === "gastos" && /* @__PURE__ */ React.createElement(GastosFijos, { gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, expenseCats, addExpenseCat, showMoney }), tab === "comisiones" && /* @__PURE__ */ React.createElement(ComisionesEmpleados, { crmData, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, showMoney, comisionOverrides, setComisionOverrides }), tab === "historial" && /* @__PURE__ */ React.createElement(
+  })()))), /* @__PURE__ */ React.createElement("div", { className: "cnt" }, tab === "dashboard" && /* @__PURE__ */ React.createElement(Dashboard, { ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport, comisionOverrides }), tab === "ingresos" && /* @__PURE__ */ React.createElement(Ingresos, { ingresos, setIngresos, crmData, showMoney, onDelete: eliminarIngresoHist }), tab === "alumnos" && /* @__PURE__ */ React.createElement(AlumnosCRM, { crmData, ingresos, setIngresos }), tab === "pronostico" && /* @__PURE__ */ React.createElement(Pronostico, { crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos }), tab === "gastos" && /* @__PURE__ */ React.createElement(GastosFijos, { gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, expenseCats, addExpenseCat, showMoney, crmData, comisionOverrides, ingresos }), tab === "comisiones" && /* @__PURE__ */ React.createElement(ComisionesEmpleados, { crmData, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, showMoney, comisionOverrides, setComisionOverrides }), tab === "historial" && /* @__PURE__ */ React.createElement(
     Historial,
     {
       ingresos,

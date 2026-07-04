@@ -1235,7 +1235,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
     const { fecha, monto, notas, desc: pagoDesc } = d;
     const pago = { id: uid(), gastoId: gasto.id, desc: pagoDesc || gasto.desc, monto, fecha, date: fecha, cat: gasto.cat, notas, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
     if ((gasto.frecuencia || "mensual") === "semanal") pago.ocurrencia = gasto._fecha;
-    else pago.mes = cm;
+    else pago.mes = (gasto._fecha || fecha || cm + "-01").slice(0, 7); // mes REAL de la ocurrencia pagada, no el mes actual
     const upd = [...pagosGastos2, pago];
     setPagosGastos2(upd);
     await stor("set", "pagosGastos", upd);
@@ -2120,7 +2120,10 @@ function App() {
         comm: (p.paqueteFolios&&p.paqueteFolios.length>1&&!p.paqueteSlave)?commIngreso:(p.commMP||0),
         ivaComm: 0,
         totalDed: commIngreso,
-        neto: (_a = p.neto) != null ? _a : p.montoFinal || 0,
+        // FIX: para paquetes, el neto debe calcularse sobre el TOTAL del paquete (montoIngreso - commIngreso),
+        // NO usar p.neto (que es el neto INDIVIDUAL de un solo folio calculado en CRM sobre su parte, ej. $850 de $5100).
+        // Ese bug hacía que "en cuenta" mostrara 1/6 del neto real mientras la comisión sí era del total.
+        neto: isPaquete ? +(montoIngreso - commIngreso).toFixed(2) : ((_a = p.neto) != null ? _a : p.montoFinal || 0),
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         autoSync: true
       };
@@ -2157,19 +2160,26 @@ function App() {
       var _a;
       const ingreso = ingresos.find((i) => i.crmFolio === String(p.crmFolio) && i.autoSync);
       if (ingreso) {
+        // FIX: mismo tratamiento de paquete que en "creados" — monto y neto deben ser
+        // del TOTAL del paquete, no del folio individual (p.montoFinal/p.neto son por folio).
+        const faPU = Array.isArray(p.paqueteFolios) ? p.paqueteFolios : Object.values(p.paqueteFolios || {});
+        const isPaqueteU = faPU && faPU.length > 1 && !p.paqueteSlave;
+        const montoU = isPaqueteU && p.paqueteTotal ? p.paqueteTotal : (p.montoFinal || 0);
+        const commU = isPaqueteU && p.method === "card" ? +(montoU * 0.035 * 1.16).toFixed(2) : (p.commMP || 0) + (p.ivaMP || 0);
+        const netoU = isPaqueteU ? +(montoU - commU).toFixed(2) : ((_a = p.neto) != null ? _a : p.montoFinal || 0);
         actualizadosMap[ingreso.id] = {
           ...ingreso,
           date: (p.fechaISO || p.fecha || ingreso.date || "").slice(0, 10),
           desc: (p.curso || "") + (p.notas ? " — " + p.notas : ""),
           alumno: p.alumnoNombre || ingreso.alumno || "",
           cursoRef: p.curso || ingreso.cursoRef || "",
-          monto: p.montoFinal || 0,
+          monto: montoU,
           method: p.method || "cash",
           notas: p.notas || "",
-          comm: p.commMP || 0,
-          ivaComm: p.ivaMP || 0,
-          totalDed: (p.commMP || 0) + (p.ivaMP || 0),
-          neto: (_a = p.neto) != null ? _a : p.montoFinal || 0,
+          comm: isPaqueteU ? commU : (p.commMP || 0),
+          ivaComm: isPaqueteU ? 0 : (p.ivaMP || 0),
+          totalDed: commU,
+          neto: netoU,
           _editadoEn: p.editadoEn,
           _actualizadoEn: (/* @__PURE__ */ new Date()).toISOString()
         };

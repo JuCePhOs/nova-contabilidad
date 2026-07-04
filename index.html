@@ -717,6 +717,12 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
   const neto = incMes.reduce((s, i) => s + i.neto, 0);
   const gastoT = gastMes.reduce((s, g) => s + g.monto, 0);
   const balance = neto - gastoT;
+  // SALDO ESTIMADO EN CUENTA BANCARIA (histórico acumulado)
+  // = todos los ingresos netos recibidos alguna vez - todos los gastos ya marcados como pagados
+  // Los gastos PENDIENTES no se restan — solo bajan cuando el usuario los marca como pagados
+  const saldoIngresosTotales = ingresos.reduce((s, i) => s + (i.neto || 0), 0);
+  const saldoGastosPagados   = pagosGastos2.reduce((s, p) => s + (p.monto || 0), 0);
+  const saldoBancario        = saldoIngresosTotales - saldoGastosPagados;
   const pendAmt = gastosFijos.filter((fe) => fe.active).reduce((s, fe) => {
     const skippedPend = new Set(fe.skippedDates || []);
     const pend = ocurrenciasGasto(fe, monthStr()).filter((fecha) => !skippedPend.has(fecha) && !pagoDeOcurrencia(fe, fecha, pagosGastos2));
@@ -757,7 +763,24 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
     const totalI = pendI.reduce((s, r) => s + r.monto, 0);
     if (totalI <= 0) return null;
     return /* @__PURE__ */ React.createElement("div", { className: "alert al-ac", style: { cursor: "pointer" }, onClick: () => setTab("comisiones") }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, "\u{1F468}\u200D\u{1F3EB}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--tx)" } }, "Pago a instructores por hacer: ", fmt$(totalI)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, marginTop: 2, opacity: 0.85 } }, pendI.length, " instructor", pendI.length !== 1 ? "es" : "", " con horas finalizadas este mes \xB7 Clic para ver detalle")));
-  })(), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginBottom: 14, textTransform: "capitalize" } }, "\u{1F4C5} Resumen de ", cmLabel), isEmpty && /* @__PURE__ */ React.createElement("div", { className: "card", style: { border: "1px dashed var(--ac)", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F504} Importar respaldo desde Claude"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginBottom: 10, lineHeight: 1.5 } }, "Si ya usaste esta app dentro de Claude, abre ah\xED la herramienta de exportaci\xF3n, copia el texto y p\xE9galo aqu\xED. Esta tarjeta desaparece sola una vez que tengas datos."), /* @__PURE__ */ React.createElement(
+  })(), /* @__PURE__ */ React.createElement("div", { style: { background: saldoBancario >= 0 ? "linear-gradient(135deg,rgba(16,201,138,.12),rgba(16,201,138,.04))" : "linear-gradient(135deg,rgba(244,107,107,.12),rgba(244,107,107,.04))", border: `1px solid ${saldoBancario >= 0 ? "rgba(16,201,138,.4)" : "rgba(244,107,107,.4)"}`, borderRadius: 12, padding: "18px 22px", marginBottom: 18 } },
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 } },
+        /* @__PURE__ */ React.createElement("div", null,
+          /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "var(--tx2)", textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 4 } }, "\u{1F4B3} Saldo estimado en cuenta bancaria"),
+          /* @__PURE__ */ React.createElement("div", { style: { fontSize: 32, fontWeight: 800, fontFamily: "var(--mono)", color: saldoBancario >= 0 ? "var(--gr)" : "var(--rd)", letterSpacing: "-1px" } }, (saldoBancario >= 0 ? "+" : "") + fmt$(saldoBancario)),
+          /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 6, lineHeight: 1.6 } },
+            /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u2191 Ingresos netos cobrados: ", fmt$(saldoIngresosTotales)),
+            /* @__PURE__ */ React.createElement("span", { style: { margin: "0 8px", color: "var(--tx3)" } }, "|"),
+            /* @__PURE__ */ React.createElement("span", { style: { color: "var(--rd)" } }, "\u2193 Gastos pagados: -", fmt$(saldoGastosPagados))
+          ),
+          /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginTop: 4 } }, "\u26A0\uFE0F Los gastos pendientes no se descuentan hasta que los marques como pagados en Gastos Fijos")
+        ),
+        /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } },
+          /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setTab("gastos"), style: { fontSize: 11 } }, "\u{1F4CB} Ir a Gastos Fijos \u2192")
+        )
+      )
+    ),
+    /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginBottom: 14, textTransform: "capitalize" } }, "\u{1F4C5} Resumen de ", cmLabel), isEmpty && /* @__PURE__ */ React.createElement("div", { className: "card", style: { border: "1px dashed var(--ac)", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F504} Importar respaldo desde Claude"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginBottom: 10, lineHeight: 1.5 } }, "Si ya usaste esta app dentro de Claude, abre ah\xED la herramienta de exportaci\xF3n, copia el texto y p\xE9galo aqu\xED. Esta tarjeta desaparece sola una vez que tengas datos."), /* @__PURE__ */ React.createElement(
     "textarea",
     {
       value: importText,

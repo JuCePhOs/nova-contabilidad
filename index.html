@@ -951,26 +951,6 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
     setShowModal(false);
     setPrefill(null);
   }
-  async function editarIngreso(inc, id) {
-    const upd = ingresos.map((i) => i.id === id ? { ...inc, id } : i);
-    setIngresos(upd);
-    await stor("set", "ingresos", upd);
-  }
-  async function eliminarIngresoHist(id) {
-    const upd = ingresos.filter((i) => i.id !== id);
-    setIngresos(upd);
-    await stor("set", "ingresos", upd);
-  }
-  async function editarPagoGastoHist(pago) {
-    const upd = pagosGastos.map((p) => p.id === pago.id ? pago : p);
-    setPagosGastos(upd);
-    await stor("set", "pagosGastos", upd);
-  }
-  async function eliminarPagoGastoHist(id) {
-    const upd = pagosGastos.filter((p) => p.id !== id);
-    setPagosGastos(upd);
-    await stor("set", "pagosGastos", upd);
-  }
   function abrirModalPago(a) {
     var _a;
     const folio = a.folios[0];
@@ -2258,7 +2238,7 @@ function App() {
     ]);
     const mor = crmAlumnos(crmData).filter((a) => !pag.has(a.alumno)).length;
     return mor > 0 ? /* @__PURE__ */ React.createElement("span", { style: { background: "var(--rd)", color: "#fff", borderRadius: 10, fontSize: 9, padding: "1px 5px", marginLeft: 4 } }, mor) : null;
-  })()))), /* @__PURE__ */ React.createElement("div", { className: "cnt" }, tab === "dashboard" && /* @__PURE__ */ React.createElement(Dashboard, { ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport, comisionOverrides, gastosRealesMes }), tab === "ingresos" && /* @__PURE__ */ React.createElement(Ingresos, { ingresos, setIngresos, crmData, showMoney, onDelete: eliminarIngresoHist }), tab === "alumnos" && /* @__PURE__ */ React.createElement(AlumnosCRM, { crmData, ingresos, setIngresos }), tab === "pronostico" && /* @__PURE__ */ React.createElement(Pronostico, { crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos, comisionOverrides, gastosRealesMes }), tab === "gastos" && /* @__PURE__ */ React.createElement(GastosFijos, { gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, expenseCats, addExpenseCat, showMoney, crmData, comisionOverrides, ingresos, gastosRealesMes }), tab === "comisiones" && /* @__PURE__ */ React.createElement(ComisionesEmpleados, { crmData, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, showMoney, comisionOverrides, setComisionOverrides }), tab === "historial" && /* @__PURE__ */ React.createElement(
+  })()))), excludedCrmFolios.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "alert al-am", style: { margin: "10px 14px 0", cursor: "pointer" }, onClick: () => limpiarExclusionFolio() }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, "\u{1F513}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--tx)" } }, excludedCrmFolios.length + " folio(s) bloqueado(s) del sync CRM: #" + excludedCrmFolios.join(", #")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, marginTop: 2, opacity: 0.85 } }, "Estos pagos existen en CRM pero no se sincronizan \u00B7 Clic para desbloquear un folio"))), /* @__PURE__ */ React.createElement("div", { className: "cnt" }, tab === "dashboard" && /* @__PURE__ */ React.createElement(Dashboard, { ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming, setTab, crmData, crmSource, refrescarCRM, onImport, comisionOverrides, gastosRealesMes }), tab === "ingresos" && /* @__PURE__ */ React.createElement(Ingresos, { ingresos, setIngresos, crmData, showMoney, onDelete: eliminarIngresoHist }), tab === "alumnos" && /* @__PURE__ */ React.createElement(AlumnosCRM, { crmData, ingresos, setIngresos }), tab === "pronostico" && /* @__PURE__ */ React.createElement(Pronostico, { crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos, comisionOverrides, gastosRealesMes }), tab === "gastos" && /* @__PURE__ */ React.createElement(GastosFijos, { gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, expenseCats, addExpenseCat, showMoney, crmData, comisionOverrides, ingresos, gastosRealesMes }), tab === "comisiones" && /* @__PURE__ */ React.createElement(ComisionesEmpleados, { crmData, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, showMoney, comisionOverrides, setComisionOverrides }), tab === "historial" && /* @__PURE__ */ React.createElement(
     Historial,
     {
       ingresos,

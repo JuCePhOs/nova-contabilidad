@@ -1523,7 +1523,12 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
   if (!(crmData == null ? void 0 : crmData.matr\u00EDculas)) {
     return /* @__PURE__ */ React.createElement("div", { className: "empty" }, /* @__PURE__ */ React.createElement("div", { className: "empty-icon" }, "\u{1F4BC}"), /* @__PURE__ */ React.createElement("div", { className: "empty-ttl" }, "Conecta el CRM"), /* @__PURE__ */ React.createElement("div", { className: "empty-sub" }, "Las comisiones se calculan a partir de las matr\u00EDculas y pagos del CRM."));
   }
-  const conEstado = comisiones.map((c) => ({ ...c, pagado: yaPagado(c) }));
+  const conEstado = comisiones.map((c) => {
+    const pg = yaPagado(c);
+    // Pagada: se agrupa en el mes REAL en que se pagó (su fecha), no en el mes teórico.
+    // Así una comisión "por pagar en agosto" que ya se pagó en julio aparece en la casilla de julio.
+    return { ...c, pagado: pg, mesPago: pg ? String(pg.fecha || pg.date || c.mesPago).slice(0, 7) : c.mesPago };
+  });
   const visibles = (conEstado.filter((c) => filtro === "todas" || filtro === "pendientes" && !c.pagado || filtro === "pagadas" && c.pagado)).filter((c) => !mesPagoF || c.mesPago === mesPagoF);
   const totalPendiente = conEstado.filter((c) => !c.pagado).reduce((s, c) => s + c.monto, 0);
   const totalPagadoHist = conEstado.filter((c) => c.pagado).reduce((s, c) => s + c.monto, 0);
@@ -1597,8 +1602,9 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
       const _out = [];
       _mesesOrd.forEach((mp) => {
         var _esMesCaido = mp === cm;
+        var _todoPagado = _grupos[mp].every(function(cc){ return cc.pagado; });
         _out.push(React.createElement("div", { key: "col-" + mp, className: "comi-col", style: { flex: "1 1 340px", minWidth: 300 } },
-          React.createElement("div", { style: { borderLeft: "3px solid " + (_esMesCaido ? "var(--rd)" : "var(--ac)"), paddingLeft: 10, margin: "16px 0 8px", fontSize: 12, fontWeight: 700, color: "var(--tx2)", textTransform: "uppercase", letterSpacing: ".4px" } }, (_esMesCaido ? "\u26A0\uFE0F " : "\u{1F4C5} ") + "Pagar el 15 de " + mesLabel(mp) + (_esMesCaido ? " (mes ca\xEDdo)" : "")),
+          React.createElement("div", { style: { borderLeft: "3px solid " + (_todoPagado ? "var(--gr)" : (_esMesCaido ? "var(--rd)" : "var(--ac)")), paddingLeft: 10, margin: "16px 0 8px", fontSize: 12, fontWeight: 700, color: _todoPagado ? "var(--gr)" : "var(--tx2)", textTransform: "uppercase", letterSpacing: ".4px" } }, _todoPagado ? "\u2713 Comisiones pagadas en " + mesLabel(mp) : ((_esMesCaido ? "\u26A0\uFE0F " : "\u{1F4C5} ") + "Pagar el 15 de " + mesLabel(mp) + (_esMesCaido ? " (mes ca\xEDdo)" : ""))),
           _grupos[mp].map((c) => _renderComisionCard(c))
         ));
       });

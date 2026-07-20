@@ -938,6 +938,20 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
   const [q, setQ] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [prefill, setPrefill] = useState(null);
+  const [editPagos, setEditPagos] = useState(null); // alumno cuyos pagos (mes + fecha) se están editando
+  async function guardarEdicionPagos() {
+    const upd = ingresos.map((i) => {
+      if (i.alumno !== editPagos) return i;
+      const mEl = document.getElementById("edit-mes-" + i.id);
+      const fEl = document.getElementById("edit-fecha-" + i.id);
+      if (!mEl || !fEl || !fEl.value) return i;
+      // El dato OFICIAL de la plataforma es la fecha de pago: define mes contable en todas las pestañas.
+      return { ...i, date: fEl.value, fecha: fEl.value, mesCorrespondiente: mEl.value || fEl.value.slice(0, 7), fechaManual: true };
+    });
+    setIngresos(upd);
+    await stor("set", "ingresos", upd);
+    setEditPagos(null);
+  }
   const [filtroCurso, setFiltroCurso] = useState("todos");
   const [filtroPago, setFiltroPago] = useState("todos"); // todos | pagados | pendientes (clic en fichas)
   const cm = monthStr();
@@ -1021,7 +1035,31 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
     setShowModal(true);
   }
   if (!crmData) return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl", style: { marginBottom: 14 } }, "\u{1F517} Alumnos del CRM"), /* @__PURE__ */ React.createElement("div", { className: "crm-off" }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, "\u{1F50C}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, color: "var(--tx)" } }, "CRM no conectado"), /* @__PURE__ */ React.createElement("div", { style: { color: "var(--tx2)" } }, "Abre el CRM (NOVA IA Academy) en el chat para sincronizar alumnos y cursos autom\xE1ticamente."))));
-  return /* @__PURE__ */ React.createElement("div", null, showModal && /* @__PURE__ */ React.createElement(ModalIngreso, { crmData, prefill, onSave: guardarIngreso, onClose: () => {
+  return /* @__PURE__ */ React.createElement("div", null, editPagos && (() => {
+    const lst = ingresos.filter((i) => i.alumno === editPagos).slice().sort((a2, b2) => String(b2.date).localeCompare(String(a2.date)));
+    return React.createElement("div", { className: "moverlay", onClick: (e) => { if (e.target === e.currentTarget) setEditPagos(null); } },
+      React.createElement("div", { className: "modal", style: { maxWidth: 620 } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: "1px solid var(--br)" } },
+          React.createElement("div", { style: { fontWeight: 700, fontSize: 15 } }, "\u270F\uFE0F Pagos de " + editPagos),
+          React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setEditPagos(null) }, "\u2715")),
+        React.createElement("div", { style: { padding: 16, maxHeight: "62vh", overflowY: "auto" } },
+          React.createElement("div", { className: "alert al-ac", style: { marginBottom: 12, fontSize: 12 } }, React.createElement("span", null, "\u2139\uFE0F"), React.createElement("div", null, "La ", React.createElement("strong", null, "fecha de pago"), " es el dato oficial: define en qu\xE9 mes cuenta esta matr\xEDcula en TODA la plataforma (Ingresos, Dashboard, Reportes). El campo Mes es referencia de a qu\xE9 mensualidad corresponde.")),
+          lst.length === 0 ? React.createElement("div", { style: { color: "var(--tx3)", textAlign: "center", padding: 12 } }, "Este alumno no tiene pagos registrados en Contabilidad") :
+          lst.map((i) => React.createElement("div", { key: i.id, style: { border: "1px solid var(--br)", borderRadius: 10, padding: "10px 12px", marginBottom: 10 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 } },
+              React.createElement("div", { style: { fontWeight: 600, fontSize: 13 } }, (i.desc || "\u2014") + (i.crmFolio ? " \u00B7 Folio #" + i.crmFolio : "")),
+              React.createElement("div", { className: "mono", style: { fontWeight: 700, color: "var(--gr)" } }, fmt$(i.monto || 0))),
+            React.createElement("div", { style: { display: "flex", gap: 12, flexWrap: "wrap" } },
+              React.createElement("div", { style: { flex: 1, minWidth: 160 } },
+                React.createElement("label", { className: "flabel" }, "Mes al que corresponde"),
+                React.createElement("input", { id: "edit-mes-" + i.id, type: "month", className: "finput", defaultValue: i.mesCorrespondiente || String(i.date || "").slice(0, 7) })),
+              React.createElement("div", { style: { flex: 1, minWidth: 160 } },
+                React.createElement("label", { className: "flabel" }, "Fecha en que se pag\xF3 \u2B50"),
+                React.createElement("input", { id: "edit-fecha-" + i.id, type: "date", className: "finput", defaultValue: String(i.date || "").slice(0, 10) }))))),
+          React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 } },
+            React.createElement("button", { className: "btn btn-o", onClick: () => setEditPagos(null) }, "Cancelar"),
+            lst.length > 0 && React.createElement("button", { className: "btn btn-p", onClick: guardarEdicionPagos }, "\u{1F4BE} Guardar")))));
+  })(), showModal && /* @__PURE__ */ React.createElement(ModalIngreso, { crmData, prefill, onSave: guardarIngreso, onClose: () => {
     setShowModal(false);
     setPrefill(null);
   } }), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F393} Alumnos del CRM"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 2 } }, "Sincronizado desde NOVA IA Academy CRM \xB7 ", cmLabel))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginBottom: 14 } }, [
@@ -1043,7 +1081,7 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
     const hist = ingPorAlumno[a.alumno];
     const histCRM = ((crmData == null ? void 0 : crmData.pagosRegulares) || []).filter((p) => p.alumnoNombre === a.alumno && !procesados.has(String(p.crmFolio)));
     const totalCRM = histCRM.reduce((s, p) => s + (p.montoFinal || 0), 0);
-    return /* @__PURE__ */ React.createElement("div", { key: a.alumno, className: `alm-row ${pagado ? "alm-paid" : "alm-due"}` }, /* @__PURE__ */ React.createElement("div", { className: "alm-avatar" }, a.alumno.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14 } }, a.alumno), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" } }, a.cursos.map((c) => /* @__PURE__ */ React.createElement("span", { key: c, className: "course-tag" }, c))), a.email && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 3 } }, "\u2709 ", a.email), (hist || totalCRM > 0) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 3 } }, "Hist\xF3rico: ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--mono)", color: "var(--gr)" } }, fmt$(((hist == null ? void 0 : hist.neto) || 0) + totalCRM)), (hist == null ? void 0 : hist.count) > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)" } }, " (", hist.count, " manual", histCRM.length > 0 ? `, ${histCRM.length} CRM` : "", ")"))), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } }, pagado ? /* @__PURE__ */ React.createElement("div", null, pagoCRM.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10 } }, "\u{1F4B3} CRM: ", fmt$(pagoCRM.reduce((s, p) => s + (p.montoFinal || 0), 0))), pagoManual.length === 0 && /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => procesarPagoCRM(a, pagoCRM[0]), title: "Registrar este cobro en la contabilidad (elegir m\xE9todo de pago)" }, "\u2192 Contabilidad")), pagoManual.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-gr", style: { fontSize: 10 } }, "\u2713 App: ", fmt$(pagoManual.reduce((s, i) => s + i.neto, 0)))), pagoCRM.length === 0 && pagoManual.length === 0 && /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado este mes")) : /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: () => abrirModalPago(a) }, "\u{1F4B0} Registrar pago")));
+    return /* @__PURE__ */ React.createElement("div", { key: a.alumno, className: `alm-row ${pagado ? "alm-paid" : "alm-due"}` }, /* @__PURE__ */ React.createElement("div", { className: "alm-avatar" }, a.alumno.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14 } }, a.alumno), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" } }, a.cursos.map((c) => /* @__PURE__ */ React.createElement("span", { key: c, className: "course-tag" }, c))), a.email && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 3 } }, "\u2709 ", a.email), (hist || totalCRM > 0) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 3 } }, "Hist\xF3rico: ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--mono)", color: "var(--gr)" } }, fmt$(((hist == null ? void 0 : hist.neto) || 0) + totalCRM)), (hist == null ? void 0 : hist.count) > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)" } }, " (", hist.count, " manual", histCRM.length > 0 ? `, ${histCRM.length} CRM` : "", ")"))), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } }, pagado ? /* @__PURE__ */ React.createElement("div", null, pagoCRM.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10 } }, "\u{1F4B3} CRM: ", fmt$(pagoCRM.reduce((s, p) => s + (p.montoFinal || 0), 0))), pagoManual.length === 0 && /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => procesarPagoCRM(a, pagoCRM[0]), title: "Registrar este cobro en la contabilidad (elegir m\xE9todo de pago)" }, "\u2192 Contabilidad")), pagoManual.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-gr", style: { fontSize: 10 } }, "\u2713 App: ", fmt$(pagoManual.reduce((s, i) => s + i.neto, 0)))), pagoCRM.length === 0 && pagoManual.length === 0 && /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado este mes")) : /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: () => abrirModalPago(a) }, "\u{1F4B0} Registrar pago")), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar mes y fecha de pago de sus matr\xEDculas", onClick: () => setEditPagos(a.alumno), style: { marginLeft: 6, flexShrink: 0 } }, "\u270F\uFE0F"));
   })));
 }
 function ModalGastoExtraordinario({ expenseCats, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, onClose }) {
@@ -2254,7 +2292,7 @@ function App() {
         const netoU = isPaqueteU ? +(montoU - commU).toFixed(2) : ((_a = p.neto) != null ? _a : p.montoFinal || 0);
         actualizadosMap[ingreso.id] = {
           ...ingreso,
-          date: (p.fechaISO || p.fecha || ingreso.date || "").slice(0, 10),
+          date: ingreso.fechaManual ? ingreso.date : (p.fechaISO || p.fecha || ingreso.date || "").slice(0, 10), // fecha editada a mano en Contabilidad = manda
           desc: (p.curso || "") + (p.notas ? " — " + p.notas : ""),
           alumno: p.alumnoNombre || ingreso.alumno || "",
           cursoRef: p.curso || ingreso.cursoRef || "",

@@ -2277,8 +2277,25 @@ function App() {
     if (!loaded) return;
     const pagosReg = (crmData == null ? void 0 : crmData.pagosRegulares) || [];
     const pagosFolios = new Set(pagosReg.filter((p) => p.crmFolio != null).map((p) => String(p.crmFolio)));
-    const existentes = new Set(ingresos.filter((i) => i.crmFolio).map((i) => String(i.crmFolio)));
     const excluidos = new Set((excludedCrmFolios || []).map(String));
+    // IDENTIDAD POR PAGO (no por folio): antes, una vez que un folio tenía UN ingreso,
+    // ningún pago posterior del MISMO folio (ej. la mensualidad del mes siguiente) volvía
+    // a sincronizar — "existentes" agrupaba TODA la historia de ese folio en una sola entrada.
+    // Ahora cada pago (p.id) tiene su propio ingreso. Los ingresos viejos (de antes de este
+    // fix, sin pagoId) se reconocen por folio+fecha para no duplicarlos; el resto de pagos
+    // de ese mismo folio en OTROS meses queda libre para sincronizar por primera vez.
+    const existentes = new Set();
+    ingresos.forEach((i) => {
+      if (!i.crmFolio) return;
+      if (i.pagoId) { existentes.add(i.pagoId); return; }
+      const legacyMatch = pagosReg.find((p) => String(p.crmFolio) === i.crmFolio && (p.fechaISO || p.fecha || "").slice(0, 10) === i.date);
+      existentes.add(legacyMatch ? legacyMatch.id : "legacy_" + i.crmFolio + "_" + i.date);
+    });
+    function _ingresoDeP(p) {
+      const directo = ingresos.find((i) => i.pagoId === p.id);
+      if (directo) return directo;
+      return ingresos.find((i) => i.autoSync && !i.pagoId && i.crmFolio === String(p.crmFolio) && i.date === (p.fechaISO || p.fecha || "").slice(0, 10));
+    }
     // LIMPIEZA: si hay múltiples ingresos para el mismo paquete (de syncs rotos),
     // conservar solo el del folio menor y eliminar el resto como huérfanos.
     var _paqGrupos = {};
@@ -2316,7 +2333,7 @@ function App() {
     // Los demás folios del paquete NUNCA crean ingreso → evita el loop infinito de re-renders.
     const nuevos = pagosReg.filter((p) => {
       if (p.crmFolio == null) return false;
-      if (existentes.has(String(p.crmFolio))) return false;
+      if (existentes.has(p.id)) return false;
       if (excluidos.has(String(p.crmFolio))) return false;
       var fa = Array.isArray(p.paqueteFolios) ? p.paqueteFolios : Object.values(p.paqueteFolios || {});
       if (!fa || fa.length <= 1) return true; // no es paquete — pasa normal
@@ -2335,6 +2352,7 @@ function App() {
         ? +(montoIngreso * 0.035 * 1.16).toFixed(2) : (p.commMP || 0) + (p.ivaMP || 0);
       return {
         id: uid(),
+        pagoId: p.id,
         date: (p.fechaISO || p.fecha || todayStr()).slice(0, 10),
         desc: descIngreso,
         alumno: p.alumnoNombre || "",
@@ -2355,17 +2373,23 @@ function App() {
         autoSync: true
       };
     });
-    const huerfanos = ingresos.filter((i) => (i.autoSync && i.crmFolio && !pagosFolios.has(String(i.crmFolio))) || _paqOrfanos.has(i.id));
+    const huerfanos = ingresos.filter((i) => {
+      if (_paqOrfanos.has(i.id)) return true;
+      if (!i.autoSync || !i.crmFolio) return false;
+      if (i.pagoId) return !pagosReg.some((p) => p.id === i.pagoId);
+      return !pagosFolios.has(String(i.crmFolio)); // legacy: huérfano solo si el folio entero desapareció
+    });
     // FIX: detectar y actualizar ingresos cuyo pago fue editado en CRM
     // guardarEdicionPago() marca editadoEn; lo comparamos con _editadoEn del ingreso
     const porActualizar = pagosReg.filter((p) => {
       if (p.crmFolio == null) return false;
-      if (!existentes.has(String(p.crmFolio))) return false;
       if (excluidos.has(String(p.crmFolio))) return false;
       if (p.paqueteSlave === true) return false;
-      const ingreso = ingresos.find((i) => i.crmFolio === String(p.crmFolio) && i.autoSync);
+      const ingreso = _ingresoDeP(p);
       if (!ingreso) return false;
       if (_paqOrfanos.has(ingreso.id)) return false;
+      // Transferencia de pago: el folio del ingreso ya no coincide con el pago actual
+      if (String(p.crmFolio) !== ingreso.crmFolio) return true;
       // Actualizar si el pago fue editado explícitamente
       if (p.editadoEn && (!ingreso._editadoEn || ingreso._editadoEn !== p.editadoEn)) return true;
       // Actualizar si el NOMBRE del alumno cambió en CRM (correcciones ortográficas) — comparación estable
@@ -2387,7 +2411,7 @@ function App() {
     const actualizadosMap = {};
     porActualizar.forEach((p) => {
       var _a;
-      const ingreso = ingresos.find((i) => i.crmFolio === String(p.crmFolio) && i.autoSync);
+      const ingreso = _ingresoDeP(p);
       if (ingreso) {
         // FIX: mismo tratamiento de paquete que en "creados" — monto y neto deben ser
         // del TOTAL del paquete, no del folio individual (p.montoFinal/p.neto son por folio).
@@ -2398,6 +2422,8 @@ function App() {
         const netoU = isPaqueteU ? +(montoU - commU).toFixed(2) : ((_a = p.neto) != null ? _a : p.montoFinal || 0);
         actualizadosMap[ingreso.id] = {
           ...ingreso,
+          pagoId: ingreso.pagoId || p.id,
+          crmFolio: String(p.crmFolio),
           date: ingreso.fechaManual ? ingreso.date : (p.fechaISO || p.fecha || ingreso.date || "").slice(0, 10), // fecha editada a mano en Contabilidad = manda
           desc: (p.curso || "") + (p.notas ? " — " + p.notas : ""),
           alumno: p.alumnoNombre || ingreso.alumno || "",
@@ -2435,7 +2461,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.07.20-2"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Re-sync folio */ React.createElement("button", { onClick: forzarResyncFolio, title: "Pago en CRM pero no en Contabilidad? Forzar re-sync de un folio", style: { marginLeft: 4, fontSize: 10, padding: "2px 8px", cursor: "pointer", background: "none", border: "1px solid #7c3aed", borderRadius: 5, color: "#7c3aed", fontWeight: 700 } }, "\uD83D\uDD04 Re-sync"), !crmData && loaded && /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, className: "btn btn-o btn-sm", style: { fontSize: 11 } }, "\u{1F50C} Conectar CRM"), /* @__PURE__ */ React.createElement("button", { onClick: toggleCurrency, title: currency === "MXN" ? "Ver en USD" : "Ver en MXN", className: "btn btn-o btn-sm", style: { fontSize: 11, minWidth: 60, fontFamily: "var(--mono)", fontWeight: 700, color: currency === "USD" ? "var(--am)" : "var(--tx2)" } }, loadingRate ? "\u23F3" : currency === "MXN" ? "\u{1F1F2}\u{1F1FD} MXN" : "\u{1F1FA}\u{1F1F8} USD"), currency === "USD" && usdRate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", whiteSpace: "nowrap" } }, "1 USD = ", fmt$(usdRate)), upcoming.length > 0 && /* @__PURE__ */ React.createElement("button", { className: `btn btn-sm ${upcoming.some((p) => p.isOverdue) ? "btn-d" : "btn-am"}`, onClick: () => setShowRem(true) }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0", " ", upcoming.length, " pendiente(s)")), /* @__PURE__ */ React.createElement("nav", { className: "nav" }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, className: `ntab ${tab === t.id ? "active" : ""}`, onClick: () => setTab(t.id), style: t.crm && crmData ? { color: tab === t.id ? "var(--pu)" : "var(--tx2)" } : {} }, t.icon, " ", t.label, t.crm && crmData && tab !== t.id && (() => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.07.21-4"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Re-sync folio */ React.createElement("button", { onClick: forzarResyncFolio, title: "Pago en CRM pero no en Contabilidad? Forzar re-sync de un folio", style: { marginLeft: 4, fontSize: 10, padding: "2px 8px", cursor: "pointer", background: "none", border: "1px solid #7c3aed", borderRadius: 5, color: "#7c3aed", fontWeight: 700 } }, "\uD83D\uDD04 Re-sync"), !crmData && loaded && /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, className: "btn btn-o btn-sm", style: { fontSize: 11 } }, "\u{1F50C} Conectar CRM"), /* @__PURE__ */ React.createElement("button", { onClick: toggleCurrency, title: currency === "MXN" ? "Ver en USD" : "Ver en MXN", className: "btn btn-o btn-sm", style: { fontSize: 11, minWidth: 60, fontFamily: "var(--mono)", fontWeight: 700, color: currency === "USD" ? "var(--am)" : "var(--tx2)" } }, loadingRate ? "\u23F3" : currency === "MXN" ? "\u{1F1F2}\u{1F1FD} MXN" : "\u{1F1FA}\u{1F1F8} USD"), currency === "USD" && usdRate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", whiteSpace: "nowrap" } }, "1 USD = ", fmt$(usdRate)), upcoming.length > 0 && /* @__PURE__ */ React.createElement("button", { className: `btn btn-sm ${upcoming.some((p) => p.isOverdue) ? "btn-d" : "btn-am"}`, onClick: () => setShowRem(true) }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0", " ", upcoming.length, " pendiente(s)")), /* @__PURE__ */ React.createElement("nav", { className: "nav" }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, className: `ntab ${tab === t.id ? "active" : ""}`, onClick: () => setTab(t.id), style: t.crm && crmData ? { color: tab === t.id ? "var(--pu)" : "var(--tx2)" } : {} }, t.icon, " ", t.label, t.crm && crmData && tab !== t.id && (() => {
     const cm = monthStr();
     const pag = /* @__PURE__ */ new Set([
       ...ingresos.filter((i) => i.date.startsWith(cm) && i.alumno).map((i) => i.alumno),

@@ -362,36 +362,46 @@ function aplicarOverridesComisiones(rawGroups, overrides, usuarios, pagosGastos)
     return (us && us.name) || u || "Sin asignar";
   };
   // BLOQUEO POR FOLIO YA PAGADO: una vez que una comisión se pagó, sus folios quedan
-  // congelados al usuario/mes con que se pagaron (comisionFolios/comisionUsuario/
-  // comisionMesGanado, guardados en el momento del pago). Así, un cambio posterior en
-  // CRM (ej. una transferencia de pago que reasigna el crmFolio de un folio) ya NO
-  // puede mover un folio que ya se pagó fuera de su mes/usuario original.
+  // congelados al usuario/mes/monto con que se pagaron (comisionFolios/comisionFolioMontos/
+  // comisionUsuario/comisionMesGanado, guardados en el momento del pago). Así, un cambio
+  // posterior en CRM (ej. una transferencia de pago) ya NO puede mover un folio pagado
+  // fuera de su mes/usuario original. Una EDICIÓN MANUAL (guardarEdicionFolios) sí puede
+  // corregirlo — y en ese caso también ajusta el registro pagado para que cuadre.
   const folioLock = {};
   (pagosGastos || []).forEach((p) => {
     if (p.cat !== "Comisiones") return;
-    (p.comisionFolios || []).forEach((f) => {
-      folioLock[f] = { usuario: p.comisionUsuario, mesGanado: p.comisionMesGanado };
+    const fs = p.comisionFolios || [];
+    const montos = p.comisionFolioMontos || {};
+    fs.forEach((f) => {
+      folioLock[f] = { usuario: p.comisionUsuario, mesGanado: p.comisionMesGanado, monto: montos[f] != null ? montos[f] : +((p.monto || 0) / (fs.length || 1)).toFixed(2) };
     });
   });
+  function _resolver(f, g) {
+    const o = ov[f];
+    const lock = folioLock[f];
+    const tieneOverride = o && (o.reasignadoA !== void 0 || o.mesPago !== void 0 || o.monto !== void 0);
+    if (o && o.excluido && !tieneOverride) {
+      const excludeThisMonth = !o.mesOriginal || o.mesOriginal === (g ? g.mesGanado : lock && lock.mesGanado);
+      if (excludeThisMonth) return null;
+    }
+    if (tieneOverride) {
+      return {
+        usuario: o.reasignadoA !== void 0 ? o.reasignadoA : (lock ? lock.usuario : g ? g.usuario : "sin_asignar"),
+        mesGanado: o.mesPago !== void 0 ? prevMonth(o.mesPago) : (lock ? lock.mesGanado : g ? g.mesGanado : monthStr()),
+        monto: o.monto !== void 0 ? o.monto : (lock ? lock.monto : COMISION_POR_CONTRATO),
+        mesEd: !!o.mesPago
+      };
+    }
+    if (lock) return { usuario: lock.usuario, mesGanado: lock.mesGanado, monto: lock.monto, mesEd: false };
+    return { usuario: g.usuario, mesGanado: g.mesGanado, monto: COMISION_POR_CONTRATO, mesEd: false };
+  }
   const items = [];
   const vistos = /* @__PURE__ */ new Set();
   (rawGroups || []).forEach((g) => {
     g.folios.forEach((f) => {
       vistos.add(String(f));
-      const lock = folioLock[f];
-      if (lock) { items.push({ folio: f, usuario: lock.usuario, mesGanado: lock.mesGanado, mesEd: false }); return; }
-      const o = ov[f];
-      if (o && o.excluido) {
-        // Respetar mesOriginal: si el folio se excluyó de un mes específico,
-        // pero ahora aparece en un mes DIFERENTE (por pago tardío), incluirlo
-        const excludeThisMonth = !o.mesOriginal || o.mesOriginal === g.mesGanado;
-        if (excludeThisMonth) return; // sí excluir
-        // Si se movió a otro mes porque se pagó tarde: se incluye en el nuevo mes
-      }
-      const usuario = (o && o.reasignadoA) ? o.reasignadoA : g.usuario;
-      // Mes de pago editado a mano para este folio: se agrupa para pagarse en ese mes
-      const mesG = (o && o.mesPago) ? prevMonth(o.mesPago) : g.mesGanado;
-      items.push({ folio: f, usuario, mesGanado: mesG, mesEd: !!(o && o.mesPago) });
+      const r = _resolver(f, g);
+      if (r) items.push({ folio: f, ...r });
     });
   });
   // Folios que YA se pagaron pero que calcComisiones ya no reconoce en absoluto en su
@@ -399,8 +409,8 @@ function aplicarOverridesComisiones(rawGroups, overrides, usuarios, pagosGastos)
   // reinyectan igual, para que la historia de lo ya pagado nunca desaparezca.
   Object.keys(folioLock).forEach((f) => {
     if (vistos.has(String(f))) return;
-    const lock = folioLock[f];
-    items.push({ folio: f, usuario: lock.usuario, mesGanado: lock.mesGanado, mesEd: false });
+    const r = _resolver(f, null);
+    if (r) items.push({ folio: f, ...r });
   });
   const grupos = {};
   items.forEach((it) => {
@@ -410,15 +420,18 @@ function aplicarOverridesComisiones(rawGroups, overrides, usuarios, pagosGastos)
         usuario: it.usuario,
         nombreUsuario: it.usuario === "sin_asignar" ? "Sin asignar" : nombreDe(it.usuario),
         mesGanado: it.mesGanado,
-        folios: []
+        folios: [],
+        folioMontos: {}
       };
     }
     grupos[key].folios.push(it.folio);
+    grupos[key].folioMontos[it.folio] = it.monto;
     if (it.mesEd) (grupos[key].foliosEditados = grupos[key].foliosEditados || {})[it.folio] = true;
   });
   return Object.values(grupos).map((g) => {
     const mesPago = nextMonth(g.mesGanado);
-    return { ...g, count: g.folios.length, monto: g.folios.length * COMISION_POR_CONTRATO, mesPago, fechaPagoDefault: `${mesPago}-15` };
+    const montoTotal = Object.values(g.folioMontos).reduce((s, v) => s + (v || 0), 0);
+    return { ...g, count: g.folios.length, monto: +montoTotal.toFixed(2), mesPago, fechaPagoDefault: `${mesPago}-15` };
   }).sort((a, b) => b.mesGanado.localeCompare(a.mesGanado) || a.nombreUsuario.localeCompare(b.nombreUsuario));
 }
 const CSS = `
@@ -1465,6 +1478,58 @@ function ModalConfirmarPagoInstructor({ pago, onSave, onClose }) {
   const [fecha, setFecha] = useState(todayStr());
   return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u2705 Confirmar Pago a Instructor"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, pago.nombre), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } }, pago.hPrincipal > 0 && /* @__PURE__ */ React.createElement("div", null, "\u{1F468}\u200D\u{1F3EB} Principal: ", pago.hPrincipal, " hrs \xD7 ", fmt$(pago.tarifaHora), "/hr"), pago.hAsistente > 0 && /* @__PURE__ */ React.createElement("div", null, "\u{1F91D} Asistente: ", pago.hAsistente, " hrs \xD7 ", fmt$(pago.tarifaHoraAsistente), "/hr")), /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 22, fontWeight: 800, marginTop: 8, color: "var(--gr)" } }, fmt$(pago.monto))), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g", onClick: () => onSave(fecha) }, "\u2713 Confirmar Pago"))));
 }
+function ModalEditarFolios({ folios, folioInfoMap, usuarios, onSave, onClose }) {
+  const mesLabel = (ym) => {
+    const [y, m] = ym.split("-");
+    const n = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+    return `${n[parseInt(m) - 1]} ${y}`;
+  };
+  const single = folios.length === 1;
+  const info0 = single ? folioInfoMap[folios[0]] || {} : null;
+  const [tUsuario, setTUsuario] = useState(false);
+  const [tMes, setTMes] = useState(false);
+  const [tMonto, setTMonto] = useState(false);
+  const [tNotas, setTNotas] = useState(false);
+  const [usuario, setUsuario] = useState(single ? info0.usuario || "" : "");
+  const [mes, setMes] = useState(single ? nextMonth(info0.mesGanado || monthStr()) : "");
+  const [monto, setMonto] = useState(single ? info0.monto != null ? String(info0.monto) : "" : "");
+  const [notas, setNotas] = useState("");
+  function guardar() {
+    const cambios = {};
+    if (tUsuario) { if (!usuario) { alert("Selecciona el ejecutivo."); return; } cambios.usuario = usuario; }
+    if (tMes) { if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) { alert("Mes inv\xE1lido. Usa AAAA-MM."); return; } cambios.mesPago = mes; }
+    if (tMonto) { const v = parseFloat(monto); if (!(v >= 0)) { alert("Monto inv\xE1lido."); return; } cambios.monto = v; }
+    if (tNotas) cambios.notas = notas;
+    if (!Object.keys(cambios).length) { alert("Marca al menos un campo para cambiar."); return; }
+    onSave(cambios);
+  }
+  return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 480 } },
+    /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u270E Editar folio", folios.length !== 1 ? "s" : "", " de comisi\xF3n"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")),
+    /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "var(--tx2)" } },
+      single ? /* @__PURE__ */ React.createElement("div", null, "Folio #", folios[0], " \u2014 actualmente: ", (usuarios.find((u) => u.username === info0.usuario) || {}).name || info0.usuario, " \xB7 ", mesLabel(nextMonth(info0.mesGanado)), " \xB7 ", fmt$(info0.monto)) : /* @__PURE__ */ React.createElement("div", null, folios.length, " folios seleccionados: #", folios.join(", #"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 4, color: "var(--am)" } }, "Marca solo los campos que quieras cambiar \u2014 se aplicar\xE1n igual a todos.")),
+    ),
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+      /* @__PURE__ */ React.createElement("div", null,
+        /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: tUsuario, onChange: (e) => setTUsuario(e.target.checked) }), /* @__PURE__ */ React.createElement("strong", null, "Cambiar ejecutivo")),
+        /* @__PURE__ */ React.createElement("select", { className: "finp", disabled: !tUsuario, value: usuario, onChange: (e) => setUsuario(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 elegir \u2014"), (usuarios || []).map((u) => /* @__PURE__ */ React.createElement("option", { key: u.username, value: u.username }, u.name || u.username)))
+      ),
+      /* @__PURE__ */ React.createElement("div", null,
+        /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: tMes, onChange: (e) => setTMes(e.target.checked) }), /* @__PURE__ */ React.createElement("strong", null, "Cambiar mes de pago"), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)", fontWeight: 400 } }, "(en qu\xE9 mes se liquida)")),
+        /* @__PURE__ */ React.createElement("input", { className: "finp", type: "month", disabled: !tMes, value: mes, onChange: (e) => setMes(e.target.value) })
+      ),
+      /* @__PURE__ */ React.createElement("div", null,
+        /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: tMonto, onChange: (e) => setTMonto(e.target.checked) }), /* @__PURE__ */ React.createElement("strong", null, "Cambiar monto"), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)", fontWeight: 400 } }, "(por defecto ", fmt$(COMISION_POR_CONTRATO), ")")),
+        /* @__PURE__ */ React.createElement("input", { className: "finp", type: "number", step: "0.01", min: "0", disabled: !tMonto, value: monto, onChange: (e) => setMonto(e.target.value), placeholder: "0.00" })
+      ),
+      /* @__PURE__ */ React.createElement("div", null,
+        /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: tNotas, onChange: (e) => setTNotas(e.target.checked) }), /* @__PURE__ */ React.createElement("strong", null, "Agregar nota")),
+        /* @__PURE__ */ React.createElement("textarea", { className: "finp", disabled: !tNotas, value: notas, onChange: (e) => setNotas(e.target.value), rows: 2, placeholder: "Motivo del cambio, contexto, etc." })
+      )
+    ),
+    /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 12 } }, "Si alg\xFAn folio seleccionado ya est\xE1 pagado: si cambias ejecutivo o mes, sale de ese pago hist\xF3rico (y el registro de gasto se ajusta); si solo corriges el monto sin mover ejecutivo/mes, el pago hist\xF3rico se actualiza en su lugar."),
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: guardar }, "\u2713 Guardar cambios"))
+  ));
+}
 function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, showMoney, comisionOverrides, setComisionOverrides }) {
   const [pagando, setPagando] = useState(null);
   const [pagandoInstr, setPagandoInstr] = useState(null);
@@ -1480,12 +1545,14 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
   const comisiones = useMemo(() => { try { return aplicarOverridesComisiones(comisionesRaw, comisionOverrides, crmData?.usuarios || [], pagosGastos2); } catch(e) { console.error('aplicarOverrides error:', e); return []; } }, [comisionesRaw, comisionOverrides, crmData, pagosGastos2]);
   async function excluirFolio(folio, mesGanado) {
     if (!confirm(`¿Quitar el folio #${folio} de esta comisión? No se pagará comisión por este contrato.`)) return;
-    const upd = { ...comisionOverrides, [folio]: { excluido: true, mesOriginal: mesGanado, editadoEn: (/* @__PURE__ */ new Date()).toISOString() } };
+    const prev = comisionOverrides[folio] || {};
+    const upd = { ...comisionOverrides, [folio]: { ...prev, excluido: true, mesOriginal: mesGanado, editadoEn: (/* @__PURE__ */ new Date()).toISOString() } };
     setComisionOverrides(upd);
     await stor("set", "comisionOverrides", upd);
   }
   async function reasignarFolio(folio, nuevoUsuario) {
-    const upd = { ...comisionOverrides, [folio]: { reasignadoA: nuevoUsuario, editadoEn: (/* @__PURE__ */ new Date()).toISOString() } };
+    const prev = comisionOverrides[folio] || {};
+    const upd = { ...comisionOverrides, [folio]: { ...prev, reasignadoA: nuevoUsuario, editadoEn: (/* @__PURE__ */ new Date()).toISOString() } };
     setComisionOverrides(upd);
     await stor("set", "comisionOverrides", upd);
   }
@@ -1494,6 +1561,72 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     delete upd[folio];
     setComisionOverrides(upd);
     await stor("set", "comisionOverrides", upd);
+  }
+  // ── Edición integral por folio: ejecutivo, mes, MONTO y notas — funciona incluso en
+  // folios YA PAGADOS (mantiene el registro pagado cuadrado: si el folio se reatribuye a
+  // otro ejecutivo/mes, sale de ese pago histórico; si solo se corrige el monto quedándose
+  // en el mismo ejecutivo/mes, se ajusta el total del pago histórico in-place) y soporta
+  // selección múltiple (mismo cambio aplicado a varios folios a la vez).
+  const [seleccionados, setSeleccionados] = useState({});
+  const [editandoFolios, setEditandoFolios] = useState(null); // array de folios en edición
+  const folioInfoMap = useMemo(() => {
+    const m = {};
+    comisiones.forEach((c) => (c.folios || []).forEach((f) => {
+      m[f] = { usuario: c.usuario, mesGanado: c.mesGanado, monto: (c.folioMontos && c.folioMontos[f] != null) ? c.folioMontos[f] : COMISION_POR_CONTRATO, pagado: !!c.pagado };
+    }));
+    return m;
+  }, [comisiones]);
+  function toggleSeleccion(folio) {
+    setSeleccionados((s) => { const n = { ...s }; if (n[folio]) delete n[folio]; else n[folio] = true; return n; });
+  }
+  async function guardarEdicionFolios(folios, cambios) {
+    let nuevosOverrides = { ...comisionOverrides };
+    let nuevosGastos = [...pagosGastos2];
+    const ahora = (/* @__PURE__ */ new Date()).toISOString();
+    folios.forEach((folio) => {
+      const info = folioInfoMap[folio] || {};
+      const prevOv = nuevosOverrides[folio] || {};
+      const usuarioNuevo = cambios.usuario !== void 0 ? cambios.usuario : (prevOv.reasignadoA !== void 0 ? prevOv.reasignadoA : info.usuario);
+      const mesGanadoNuevo = cambios.mesPago !== void 0 ? prevMonth(cambios.mesPago) : (prevOv.mesPago !== void 0 ? prevMonth(prevOv.mesPago) : info.mesGanado);
+      const montoNuevo = cambios.monto !== void 0 ? cambios.monto : (prevOv.monto !== void 0 ? prevOv.monto : info.monto);
+      const nuevoOv = { ...prevOv };
+      if (cambios.usuario !== void 0) nuevoOv.reasignadoA = cambios.usuario;
+      if (cambios.mesPago !== void 0) nuevoOv.mesPago = cambios.mesPago;
+      if (cambios.monto !== void 0) nuevoOv.monto = cambios.monto;
+      if (cambios.notas !== void 0) nuevoOv.notas = cambios.notas;
+      delete nuevoOv.excluido;
+      delete nuevoOv.mesOriginal;
+      nuevoOv.editadoEn = ahora;
+      nuevosOverrides[folio] = nuevoOv;
+      const idxPagado = nuevosGastos.findIndex((p) => p.cat === "Comisiones" && (p.comisionFolios || []).some((f) => String(f) === String(folio)));
+      if (idxPagado >= 0) {
+        const rec = nuevosGastos[idxPagado];
+        const mismoDestino = String(rec.comisionUsuario) === String(usuarioNuevo) && String(rec.comisionMesGanado) === String(mesGanadoNuevo);
+        const foliosPrev = rec.comisionFolios || [];
+        const montosPrev = { ...(rec.comisionFolioMontos || {}) };
+        foliosPrev.forEach((f) => { if (montosPrev[f] === void 0) montosPrev[f] = +((rec.monto || 0) / (foliosPrev.length || 1)).toFixed(2); });
+        if (mismoDestino) {
+          montosPrev[folio] = montoNuevo;
+          const nuevoTotal = Object.values(montosPrev).reduce((s, v) => s + v, 0);
+          nuevosGastos[idxPagado] = { ...rec, comisionFolioMontos: montosPrev, monto: +nuevoTotal.toFixed(2) };
+        } else {
+          delete montosPrev[folio];
+          const foliosRestantes = foliosPrev.filter((f) => String(f) !== String(folio));
+          if (foliosRestantes.length === 0) {
+            nuevosGastos.splice(idxPagado, 1);
+          } else {
+            const nuevoTotal = Object.values(montosPrev).reduce((s, v) => s + v, 0);
+            nuevosGastos[idxPagado] = { ...rec, comisionFolios: foliosRestantes, comisionFolioMontos: montosPrev, monto: +nuevoTotal.toFixed(2) };
+          }
+        }
+      }
+    });
+    setComisionOverrides(nuevosOverrides);
+    setPagosGastos2(nuevosGastos);
+    await stor("set", "comisionOverrides", nuevosOverrides);
+    await stor("set", "pagosGastos", nuevosGastos);
+    setSeleccionados({});
+    setEditandoFolios(null);
   }
   const cmActualInst = monthStr();
   const mesPasadoInst = prevMonth(cmActualInst);
@@ -1572,7 +1705,8 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       comisionUsuario: c.usuario,
       comisionMesGanado: c.mesGanado,
-      comisionFolios: c.folios
+      comisionFolios: c.folios,
+      comisionFolioMontos: { ...c.folioMontos }
     };
     const upd = [...pagosGastos2, pago];
     setPagosGastos2(upd);
@@ -1599,12 +1733,18 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
   const totalMesCaido = comisionesMesCaido.reduce((s, c) => s + c.monto, 0);
   const totalMesEnCurso = comisionesMesEnCurso.reduce((s, c) => s + c.monto, 0);
   function _renderComisionCard(c) {
-    return /* @__PURE__ */ React.createElement("div", { key: c.usuario + c.mesGanado, className: "exp-item", style: { borderColor: c.pagado ? "rgba(16,201,138,.4)" : "var(--br)" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, c.nombreUsuario), c.pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4C5} Contratos de ", mesLabel(c.mesGanado)), /* @__PURE__ */ React.createElement("span", null, "\u{1F4C4} ", c.count, " contrato", c.count !== 1 ? "s" : ""), /* @__PURE__ */ React.createElement("span", null, "\u{1F4B5} ", fmt$(COMISION_POR_CONTRATO), " c/u"), c.pagado ? /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F5D3}\uFE0F Pagado el ", fmtD(c.pagado.fecha)) : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F5D3}\uFE0F Pagar el 15 de ", mesLabel(c.mesPago))), /* @__PURE__ */ React.createElement("details", { style: { marginTop: 6 } }, /* @__PURE__ */ React.createElement("summary", { style: { cursor: "pointer", fontSize: 10, color: "var(--tx3)" } }, "Ver folios (", c.folios.length, ")"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 4, display: "flex", flexDirection: "column", gap: 4 } }, c.folios.map((f) => {
+    const montosUnicos = /* @__PURE__ */ new Set(Object.values(c.folioMontos || {}).map((v) => +v));
+    const montoUniforme = montosUnicos.size <= 1;
+    return /* @__PURE__ */ React.createElement("div", { key: c.usuario + c.mesGanado, className: "exp-item", style: { borderColor: c.pagado ? "rgba(16,201,138,.4)" : "var(--br)" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, c.nombreUsuario), c.pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4C5} Contratos de ", mesLabel(c.mesGanado)), /* @__PURE__ */ React.createElement("span", null, "\u{1F4C4} ", c.count, " contrato", c.count !== 1 ? "s" : ""), montoUniforme ? /* @__PURE__ */ React.createElement("span", null, "\u{1F4B5} ", fmt$([...montosUnicos][0] != null ? [...montosUnicos][0] : COMISION_POR_CONTRATO), " c/u") : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F4B5} montos variables (editados)"), c.pagado ? /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F5D3}\uFE0F Pagado el ", fmtD(c.pagado.fecha)) : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F5D3}\uFE0F Pagar el 15 de ", mesLabel(c.mesPago))), /* @__PURE__ */ React.createElement("details", { style: { marginTop: 6 }, open: c.folios.some((f) => seleccionados[f]) }, /* @__PURE__ */ React.createElement("summary", { style: { cursor: "pointer", fontSize: 10, color: "var(--tx3)" } }, "Ver folios (", c.folios.length, ")"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 4, display: "flex", flexDirection: "column", gap: 4 } }, c.folios.map((f) => {
     const matF = (crmData.matrículas || []).find((mm) => String(mm.folio) === String(f));
-    return /* @__PURE__ */ React.createElement("div", { key: f, style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 11, color: "var(--tx2)", background: "var(--s1)", borderRadius: 6, padding: "4px 8px", flexWrap: "wrap" } },
-      /* @__PURE__ */ React.createElement("span", null, "#", f, matF ? ` — ${matF.alumno}` : "", c.foliosEditados && c.foliosEditados[f] ? " \u{1F4C5}\u270E" : ""),
-      !c.pagado && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
-        /* @__PURE__ */ React.createElement("select", {
+    return /* @__PURE__ */ React.createElement("div", { key: f, style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 11, color: "var(--tx2)", background: seleccionados[f] ? "rgba(124,58,237,.12)" : "var(--s1)", borderRadius: 6, padding: "4px 8px", flexWrap: "wrap", outline: seleccionados[f] ? "1px solid #7c3aed" : "none" } },
+      /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, cursor: "pointer" } },
+        /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!seleccionados[f], onChange: () => toggleSeleccion(f) }),
+        /* @__PURE__ */ React.createElement("span", null, "#", f, matF ? ` \u2014 ${matF.alumno}` : "", " \xB7 ", fmt$((c.folioMontos && c.folioMontos[f]) != null ? c.folioMontos[f] : COMISION_POR_CONTRATO), c.foliosEditados && c.foliosEditados[f] ? " \u{1F4C5}\u270E" : "")
+      ),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
+        /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar ejecutivo, mes, monto o notas de este folio", style: { fontSize: 10, padding: "2px 6px", fontWeight: 700, color: "#7c3aed", borderColor: "#7c3aed" }, onClick: () => setEditandoFolios([f]) }, "\u270E Editar"),
+        !c.pagado && /* @__PURE__ */ React.createElement("select", {
           value: "",
           onChange: (e) => { if (e.target.value) reasignarFolio(f, e.target.value); },
           style: { fontSize: 10, padding: "2px 4px", borderRadius: 4, background: "var(--s2)", color: "var(--tx2)", border: "1px solid var(--br)" }
@@ -1612,10 +1752,11 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
           /* @__PURE__ */ React.createElement("option", { value: "" }, "Reasignar a\u2026"),
           (crmData.usuarios || []).filter((u) => u.username !== c.usuario).map((u) => /* @__PURE__ */ React.createElement("option", { key: u.username, value: u.username }, u.name || u.username))
         ),
-        /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Cambiar en qu\xE9 mes se paga este folio", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => cambiarMesPagoFolio(f, c.mesPago) }, "\u{1F4C5} Mes"),
-        /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => excluirFolio(f, c.mesGanado) }, "\u{1F5D1}\uFE0F Quitar")
+        !c.pagado && /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Cambiar en qu\xE9 mes se paga este folio", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => cambiarMesPagoFolio(f, c.mesPago) }, "\u{1F4C5} Mes"),
+        !c.pagado && /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => excluirFolio(f, c.mesGanado) }, "\u{1F5D1}\uFE0F Quitar")
       )
     );
+
   })))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700 } }, disp(c.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, "comisi\u00F3n")), !c.pagado && /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: () => setPagando(c) }, "\u2713 Marcar pagado"), c.pagado && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagada"), c.pagado.fecha && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginTop: 3 } }, "\u{1F5D3}\uFE0F ", c.pagado.fecha), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar en qu\xE9 fecha/mes se pag\xF3", style: { fontSize: 10, padding: "2px 6px", marginTop: 4 }, onClick: () => editarFechaPagoComision(c) }, "\u{1F4C5} Editar fecha"))));
   }
   function filaInstructor(r, mostrarBoton) {
@@ -1643,6 +1784,12 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
   }
   return /* @__PURE__ */ React.createElement("div", null,
     pagando && /* @__PURE__ */ React.createElement(ModalConfirmarComision, { comision: pagando, onSave: (f) => confirmarPago(pagando, f), onClose: () => setPagando(null) }),
+    editandoFolios && /* @__PURE__ */ React.createElement(ModalEditarFolios, { folios: editandoFolios, folioInfoMap, usuarios: crmData.usuarios || [], onSave: (cambios) => guardarEdicionFolios(editandoFolios, cambios), onClose: () => setEditandoFolios(null) }),
+    Object.keys(seleccionados).length > 0 && /* @__PURE__ */ React.createElement("div", { style: { position: "sticky", top: 8, zIndex: 5, background: "#7c3aed", color: "#fff", borderRadius: 10, padding: "10px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", boxShadow: "0 4px 14px rgba(124,58,237,.35)" } },
+      /* @__PURE__ */ React.createElement("strong", null, Object.keys(seleccionados).length, " folio", Object.keys(seleccionados).length !== 1 ? "s" : "", " seleccionado", Object.keys(seleccionados).length !== 1 ? "s" : ""),
+      /* @__PURE__ */ React.createElement("button", { className: "btn btn-sm", style: { background: "#fff", color: "#7c3aed", fontWeight: 700 }, onClick: () => setEditandoFolios(Object.keys(seleccionados).map((f) => isNaN(f) ? f : +f)) }, "\u270E Editar seleccionados"),
+      /* @__PURE__ */ React.createElement("button", { className: "btn btn-sm", style: { background: "rgba(255,255,255,.15)", color: "#fff" }, onClick: () => setSeleccionados({}) }, "Cancelar selecci\xF3n")
+    ),
     /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4BC} Comisiones de Empleados")),
     /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", border: "1px solid var(--br)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 12, color: "var(--tx2)", lineHeight: 1.6 } }, "\u{1F4A1} Cada ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--tx)" } }, "contrato creado y con pago confirmado"), " genera una comisi\u00F3n \u00FAnica de ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--gr)" } }, fmt$(COMISION_POR_CONTRATO)), " para el usuario que lo registr\u00F3. Las comisiones de un mes se liquidan el ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--tx)" } }, "d\u00EDa 15 del mes siguiente"), ", y ese gasto se contabiliza en el mes en que se paga (mes vencido)."),
     /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 } },
@@ -2589,7 +2736,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.07.22-4"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Re-sync folio */ React.createElement("button", { onClick: forzarResyncFolio, title: "Pago en CRM pero no en Contabilidad? Forzar re-sync de un folio", style: { marginLeft: 4, fontSize: 10, padding: "2px 8px", cursor: "pointer", background: "none", border: "1px solid #7c3aed", borderRadius: 5, color: "#7c3aed", fontWeight: 700 } }, "\uD83D\uDD04 Re-sync"), !crmData && loaded && /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, className: "btn btn-o btn-sm", style: { fontSize: 11 } }, "\u{1F50C} Conectar CRM"), /* @__PURE__ */ React.createElement("button", { onClick: toggleCurrency, title: currency === "MXN" ? "Ver en USD" : "Ver en MXN", className: "btn btn-o btn-sm", style: { fontSize: 11, minWidth: 60, fontFamily: "var(--mono)", fontWeight: 700, color: currency === "USD" ? "var(--am)" : "var(--tx2)" } }, loadingRate ? "\u23F3" : currency === "MXN" ? "\u{1F1F2}\u{1F1FD} MXN" : "\u{1F1FA}\u{1F1F8} USD"), currency === "USD" && usdRate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", whiteSpace: "nowrap" } }, "1 USD = ", fmt$(usdRate)), upcoming.length > 0 && /* @__PURE__ */ React.createElement("button", { className: `btn btn-sm ${upcoming.some((p) => p.isOverdue) ? "btn-d" : "btn-am"}`, onClick: () => setShowRem(true) }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0", " ", upcoming.length, " pendiente(s)")), /* @__PURE__ */ React.createElement("nav", { className: "nav" }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, className: `ntab ${tab === t.id ? "active" : ""}`, onClick: () => setTab(t.id), style: t.crm && crmData ? { color: tab === t.id ? "var(--pu)" : "var(--tx2)" } : {} }, t.icon, " ", t.label, t.crm && crmData && tab !== t.id && (() => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.07.23-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Re-sync folio */ React.createElement("button", { onClick: forzarResyncFolio, title: "Pago en CRM pero no en Contabilidad? Forzar re-sync de un folio", style: { marginLeft: 4, fontSize: 10, padding: "2px 8px", cursor: "pointer", background: "none", border: "1px solid #7c3aed", borderRadius: 5, color: "#7c3aed", fontWeight: 700 } }, "\uD83D\uDD04 Re-sync"), !crmData && loaded && /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, className: "btn btn-o btn-sm", style: { fontSize: 11 } }, "\u{1F50C} Conectar CRM"), /* @__PURE__ */ React.createElement("button", { onClick: toggleCurrency, title: currency === "MXN" ? "Ver en USD" : "Ver en MXN", className: "btn btn-o btn-sm", style: { fontSize: 11, minWidth: 60, fontFamily: "var(--mono)", fontWeight: 700, color: currency === "USD" ? "var(--am)" : "var(--tx2)" } }, loadingRate ? "\u23F3" : currency === "MXN" ? "\u{1F1F2}\u{1F1FD} MXN" : "\u{1F1FA}\u{1F1F8} USD"), currency === "USD" && usdRate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", whiteSpace: "nowrap" } }, "1 USD = ", fmt$(usdRate)), upcoming.length > 0 && /* @__PURE__ */ React.createElement("button", { className: `btn btn-sm ${upcoming.some((p) => p.isOverdue) ? "btn-d" : "btn-am"}`, onClick: () => setShowRem(true) }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0", " ", upcoming.length, " pendiente(s)")), /* @__PURE__ */ React.createElement("nav", { className: "nav" }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, className: `ntab ${tab === t.id ? "active" : ""}`, onClick: () => setTab(t.id), style: t.crm && crmData ? { color: tab === t.id ? "var(--pu)" : "var(--tx2)" } : {} }, t.icon, " ", t.label, t.crm && crmData && tab !== t.id && (() => {
     const cm = monthStr();
     const pag = /* @__PURE__ */ new Set([
       ...ingresos.filter((i) => i.date.startsWith(cm) && i.alumno).map((i) => i.alumno),

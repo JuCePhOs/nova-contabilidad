@@ -355,15 +355,31 @@ function calcComisiones(crmData) {
     return { ...g, count: g.folios.length, monto: g.folios.length * COMISION_POR_CONTRATO, mesPago, fechaPagoDefault: `${mesPago}-15` };
   }).sort((a, b) => b.mesGanado.localeCompare(a.mesGanado) || a.nombreUsuario.localeCompare(b.nombreUsuario));
 }
-function aplicarOverridesComisiones(rawGroups, overrides, usuarios) {
+function aplicarOverridesComisiones(rawGroups, overrides, usuarios, pagosGastos) {
   const ov = overrides || {};
   const nombreDe = (u) => {
     const us = (usuarios || []).find((x) => x.username === u);
     return (us && us.name) || u || "Sin asignar";
   };
+  // BLOQUEO POR FOLIO YA PAGADO: una vez que una comisión se pagó, sus folios quedan
+  // congelados al usuario/mes con que se pagaron (comisionFolios/comisionUsuario/
+  // comisionMesGanado, guardados en el momento del pago). Así, un cambio posterior en
+  // CRM (ej. una transferencia de pago que reasigna el crmFolio de un folio) ya NO
+  // puede mover un folio que ya se pagó fuera de su mes/usuario original.
+  const folioLock = {};
+  (pagosGastos || []).forEach((p) => {
+    if (p.cat !== "Comisiones") return;
+    (p.comisionFolios || []).forEach((f) => {
+      folioLock[f] = { usuario: p.comisionUsuario, mesGanado: p.comisionMesGanado };
+    });
+  });
   const items = [];
+  const vistos = /* @__PURE__ */ new Set();
   (rawGroups || []).forEach((g) => {
     g.folios.forEach((f) => {
+      vistos.add(String(f));
+      const lock = folioLock[f];
+      if (lock) { items.push({ folio: f, usuario: lock.usuario, mesGanado: lock.mesGanado, mesEd: false }); return; }
       const o = ov[f];
       if (o && o.excluido) {
         // Respetar mesOriginal: si el folio se excluyó de un mes específico,
@@ -377,6 +393,14 @@ function aplicarOverridesComisiones(rawGroups, overrides, usuarios) {
       const mesG = (o && o.mesPago) ? prevMonth(o.mesPago) : g.mesGanado;
       items.push({ folio: f, usuario, mesGanado: mesG, mesEd: !!(o && o.mesPago) });
     });
+  });
+  // Folios que YA se pagaron pero que calcComisiones ya no reconoce en absoluto en su
+  // pasada en vivo (ej. origen de una transferencia sin ningún otro rastro): se
+  // reinyectan igual, para que la historia de lo ya pagado nunca desaparezca.
+  Object.keys(folioLock).forEach((f) => {
+    if (vistos.has(String(f))) return;
+    const lock = folioLock[f];
+    items.push({ folio: f, usuario: lock.usuario, mesGanado: lock.mesGanado, mesEd: false });
   });
   const grupos = {};
   items.forEach((it) => {
@@ -672,6 +696,27 @@ function MiniBarChart({ data, height = 200 }) {
     return /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("rect", { x: cx - barW - 2, y: padT + innerH - hIng, width: barW, height: Math.max(0, hIng), fill: "#10C98A", rx: "3" }, /* @__PURE__ */ React.createElement("title", null, `${d.m}: ${fmt$(d.ing || 0)}`)), /* @__PURE__ */ React.createElement("rect", { x: cx + 2, y: padT + innerH - hGst, width: barW, height: Math.max(0, hGst), fill: "#F46B6B", rx: "3" }, /* @__PURE__ */ React.createElement("title", null, `${d.m}: ${fmt$(d.gst || 0)}`)), /* @__PURE__ */ React.createElement("text", { x: cx, y: H - 8, textAnchor: "middle", fontSize: "10", fill: "var(--tx2)" }, d.m));
   })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, justifyContent: "center", marginTop: 6, fontSize: 11, color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 10, height: 10, background: "#10C98A", borderRadius: 2, marginRight: 5, verticalAlign: "middle" } }), "Ingresos netos"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 10, height: 10, background: "#F46B6B", borderRadius: 2, marginRight: 5, verticalAlign: "middle" } }), "Gastos")));
 }
+function TripleBarChart({ data, keys, labels, colors, height = 220 }) {
+  if (!data || !data.length) return /* @__PURE__ */ React.createElement("div", { style: { height, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--tx3)", fontSize: 12 } }, "Sin datos");
+  const W = 700, H = height, padL = 30, padB = 26, padT = 10, padR = 8;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const maxV = Math.max(1, ...data.flatMap((d) => keys.map((k) => d[k] || 0)));
+  const niceMax = Math.max(5, Math.ceil(maxV * 1.15));
+  const n = data.length, groupW = innerW / n, barW = Math.min(14, groupW * 0.24);
+  const yTo = (v) => padT + innerH - v / niceMax * innerH;
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(niceMax * f));
+  return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("svg", { viewBox: `0 0 ${W} ${H}`, style: { width: "100%", height, display: "block" }, preserveAspectRatio: "xMidYMid meet" },
+    ticks.map((t, i) => /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("line", { x1: padL, x2: W - padR, y1: yTo(t), y2: yTo(t), stroke: "var(--br)", strokeDasharray: "3 3" }), /* @__PURE__ */ React.createElement("text", { x: padL - 5, y: yTo(t) + 3, textAnchor: "end", fontSize: "9", fill: "var(--tx2)" }, t))),
+    data.map((d, i) => {
+      const cx = padL + groupW * i + groupW / 2;
+      return /* @__PURE__ */ React.createElement("g", { key: i }, keys.map((k, j) => {
+        const val = d[k] || 0, h = val / niceMax * innerH;
+        const x = cx - barW * 1.5 + j * (barW + 3);
+        return /* @__PURE__ */ React.createElement("rect", { key: k, x, y: padT + innerH - h, width: barW, height: Math.max(0, h), fill: colors[j % colors.length], rx: "2" }, /* @__PURE__ */ React.createElement("title", null, `${d.m} \u2014 ${labels[j]}: ${val}`));
+      }), /* @__PURE__ */ React.createElement("text", { x: cx, y: H - 8, textAnchor: "middle", fontSize: "10", fill: "var(--tx2)" }, d.m));
+    })
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, justifyContent: "center", marginTop: 6, fontSize: 11, color: "var(--tx2)", flexWrap: "wrap" } }, keys.map((k, j) => /* @__PURE__ */ React.createElement("span", { key: k }, /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 10, height: 10, background: colors[j % colors.length], borderRadius: 2, marginRight: 5, verticalAlign: "middle" } }), labels[j]))));
+}
 function MiniPieChart({ data, colors, height = 200 }) {
   if (!data || !data.length) return /* @__PURE__ */ React.createElement("div", { style: { height, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--tx3)", fontSize: 12 } }, "Sin datos");
   const total = data.reduce((s, d) => s + (d.value || 0), 0) || 1;
@@ -777,7 +822,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
     if (det === "saldo") return React.createElement(FichaDetalle, { titulo: "\u{1F4B3} Saldo estimado = cobrado \u2212 pagado (hist\xF3rico)", cols: ["Concepto", "Monto"], rows: [["\u2191 Ingresos netos cobrados (" + ingresos.length + " ingresos)", "+" + F(saldoIngresosTotales)], ["\u2193 Gastos pagados (" + pagosGastos2.length + " pagos)", "\u2212" + F(saldoGastosPagados)]], total: (saldoBancario >= 0 ? "+" : "") + F(saldoBancario), onClose: () => setDet(null) });
     return null; })(), upcoming.length > 0 && /* @__PURE__ */ React.createElement("div", { className: `alert ${upcoming.some((p) => p.isOverdue) ? "al-rd" : "al-am"}`, style: { cursor: "pointer" }, onClick: () => setTab("gastos") }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--tx)" } }, upcoming.filter((p) => p.isOverdue).length > 0 ? `${upcoming.filter((p) => p.isOverdue).length} pago(s) VENCIDO(s) \u2014 Requiere atenci\xF3n` : `${upcoming.length} pago(s) pr\xF3ximo(s) esta semana`), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, marginTop: 2, opacity: 0.85 } }, "Pendiente total: ", fmt$(pendAmt), " \xB7 Clic para ir a Gastos Fijos"))), (() => {
     const cm2 = monthStr();
-    const pend = aplicarOverridesComisiones(calcComisiones(crmData), comisionOverrides, (crmData == null ? void 0 : crmData.usuarios) || []).filter((c) => !pagosGastos2.some((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado));
+    const pend = aplicarOverridesComisiones(calcComisiones(crmData), comisionOverrides, (crmData == null ? void 0 : crmData.usuarios) || [], pagosGastos2).filter((c) => !pagosGastos2.some((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado));
     const total = pend.reduce((s, c) => s + c.monto, 0);
     if (total <= 0) return null;
     const meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -1216,7 +1261,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
   const comisionesItems = useMemo(() => {
     if (!crmData) return [];
     const raw = calcComisiones(crmData);
-    const ajustadas = aplicarOverridesComisiones(raw, comisionOverrides, crmData.usuarios || []);
+    const ajustadas = aplicarOverridesComisiones(raw, comisionOverrides, crmData.usuarios || [], pagosGastos2);
     return ajustadas.map((c) => ({
       ...c,
       _tipo: "comision",
@@ -1432,7 +1477,7 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     return `${n[parseInt(m) - 1]} ${y}`;
   };
   const comisionesRaw = useMemo(() => { try { return calcComisiones(crmData); } catch(e) { console.error('calcComisiones error:', e); return []; } }, [crmData]);
-  const comisiones = useMemo(() => { try { return aplicarOverridesComisiones(comisionesRaw, comisionOverrides, crmData?.usuarios || []); } catch(e) { console.error('aplicarOverrides error:', e); return []; } }, [comisionesRaw, comisionOverrides, crmData]);
+  const comisiones = useMemo(() => { try { return aplicarOverridesComisiones(comisionesRaw, comisionOverrides, crmData?.usuarios || [], pagosGastos2); } catch(e) { console.error('aplicarOverrides error:', e); return []; } }, [comisionesRaw, comisionOverrides, crmData, pagosGastos2]);
   async function excluirFolio(folio, mesGanado) {
     if (!confirm(`¿Quitar el folio #${folio} de esta comisión? No se pagará comisión por este contrato.`)) return;
     const upd = { ...comisionOverrides, [folio]: { excluido: true, mesOriginal: mesGanado, editadoEn: (/* @__PURE__ */ new Date()).toISOString() } };
@@ -1747,6 +1792,48 @@ function Reportes({ ingresos: ingresosAll, pagosGastos: pagosGastosAll, crmData 
     }),
     [ingresos, pagosGastos2]
   );
+  // "Alumnos registrados": nuevo ingreso / regulares (continúan) / baja, por mes.
+  // Reconstruye por alumno su primer mes de inscripción (matrículas actuales +
+  // matrículasOriginales de ex-alumnos) y, si aplica, su mes de baja.
+  const alumnosTimeline = useMemo(() => {
+    if (!(crmData == null ? void 0 : crmData["matr\xEDculas"])) return [];
+    const INICIO = "2026-06";
+    const hoyYm = `${(/* @__PURE__ */ new Date()).getFullYear()}-${String((/* @__PURE__ */ new Date()).getMonth() + 1).padStart(2, "0")}`;
+    const nextYm = (ym) => { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+    const porAlumno = {};
+    (crmData["matr\xEDculas"] || []).forEach((m) => {
+      if (!m.alumno) return;
+      const mes = (m.fechaISO || "").slice(0, 7);
+      if (!mes) return;
+      if (!porAlumno[m.alumno] || mes < porAlumno[m.alumno].primerMes) porAlumno[m.alumno] = { primerMes: mes, bajaMes: null };
+    });
+    (crmData.alumnosInactivos || []).forEach((a) => {
+      if (!a.alumno) return;
+      const mats = a["matr\xEDculasOriginales"] || [];
+      let primerMes = mats.reduce((min, x) => { const mm = (x.fechaISO || "").slice(0, 7); return mm && (!min || mm < min) ? mm : min; }, null);
+      const bajaMes = (a.fechaBaja || "").slice(0, 7) || null;
+      if (!primerMes) primerMes = bajaMes;
+      if (!primerMes) return;
+      if (!porAlumno[a.alumno] || primerMes < porAlumno[a.alumno].primerMes) porAlumno[a.alumno] = { primerMes, bajaMes };
+      else if (!porAlumno[a.alumno].bajaMes) porAlumno[a.alumno].bajaMes = bajaMes;
+    });
+    const nombres = Object.keys(porAlumno);
+    const out = [];
+    let ym = INICIO;
+    while (ym <= hoyYm) {
+      let nuevos = 0, activos = 0, baja = 0;
+      nombres.forEach((n) => {
+        const info = porAlumno[n];
+        if (info.primerMes > ym) return;
+        if (info.primerMes === ym) nuevos++;
+        if (info.bajaMes === ym) baja++;
+        if (!info.bajaMes || info.bajaMes >= ym) activos++;
+      });
+      out.push({ m: new Date(ym + "-15").toLocaleDateString("es-MX", { month: "short", year: "2-digit" }), nuevos, regulares: Math.max(0, activos - nuevos), baja });
+      ym = nextYm(ym);
+    }
+    return out;
+  }, [crmData]);
   // "Ingresos totales": 100% = TOTAL de ingresos esperados; verde = ya recibidos, rojo = faltan.
   // Esperado por mes = mensualidad de cada matr\xEDcula mensual activa ese mes
   // + primerPago de las de pago \xFAnico en su mes de inscripci\xF3n.
@@ -1813,7 +1900,7 @@ function Reportes({ ingresos: ingresosAll, pagosGastos: pagosGastosAll, crmData 
     { k: "netoH", label: "Ingresos Netos " + sufijo, val: fmt$(totInc), sub: "Lo que llega a tu cuenta", stripe: "var(--ac)", vcol: "var(--ac)" },
     { k: "gastosH", label: "Gastos Totales " + sufijo, val: fmt$(totGst), sub: "Suma de pagos registrados", stripe: "var(--rd)", vcol: "var(--rd)" },
     { k: "commH", label: "Comisiones Mercado Pago " + sufijo, val: fmt$(totComm), sub: "Total pagado en comisiones", stripe: "var(--am)", vcol: "var(--am)" }
-  ].map(({ label, val, sub, stripe, vcol, k }) => /* @__PURE__ */ React.createElement("div", { key: label, className: "scard", title: "Clic: ver de d\xF3nde sale esta cifra", onClick: () => setDet(k), style: { "--stripe": stripe, "--vcol": vcol, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "slabel" }, label), /* @__PURE__ */ React.createElement("div", { className: "sval" }, val), /* @__PURE__ */ React.createElement("div", { className: "ssub" }, sub)))), /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F4C8} Balance Mensual (12 meses)"), /* @__PURE__ */ React.createElement(MiniBarChart, { data: monthly, height: 240 })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(270px,1fr))", gap: 14 } }, [
+  ].map(({ label, val, sub, stripe, vcol, k }) => /* @__PURE__ */ React.createElement("div", { key: label, className: "scard", title: "Clic: ver de d\xF3nde sale esta cifra", onClick: () => setDet(k), style: { "--stripe": stripe, "--vcol": vcol, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "slabel" }, label), /* @__PURE__ */ React.createElement("div", { className: "sval" }, val), /* @__PURE__ */ React.createElement("div", { className: "ssub" }, sub)))), /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F4C8} Balance Mensual (12 meses)"), /* @__PURE__ */ React.createElement(MiniBarChart, { data: monthly, height: 240 })), /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F465} Alumnos registrados"), /* @__PURE__ */ React.createElement(TripleBarChart, { data: alumnosTimeline, keys: ["nuevos", "regulares", "baja"], labels: ["Nuevo ingreso", "Regulares", "Bajas"], colors: ["#6C5CE7", "#10C98A", "#F46B6B"], height: 240 })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(270px,1fr))", gap: 14 } }, [
     { title: "\u{1F4B0} Ingresos totales (" + (ingTotales.lblMes ? new Date(ingTotales.lblMes + "-15").toLocaleDateString("es-MX", { month: "long", year: "numeric" }) : "Hist\xF3rico") + ") \u2014 " + (ingTotales.esperado > 0 ? Math.round(ingTotales.realizado / ingTotales.esperado * 100) : 0) + "% de " + fmt$(ingTotales.esperado) + " esperados", data: ingTotales.arr, colors: ["#10C98A", "#F46B6B"] },
     { title: "\u{1F4B3} Ingresos por M\xE9todo de Pago", data: metodos, colors: ["#22D4EF", "#10C98A", "#9B72F8"] },
     { title: "\u{1F4CB} Gastos por Categor\xEDa", data: catGst, colors: P2 }
@@ -2309,7 +2396,7 @@ function App() {
     });
     // 3. Comisiones pendientes
     const comRaw = crmData ? calcComisiones(crmData) : [];
-    const comAjust = crmData ? aplicarOverridesComisiones(comRaw, comisionOverrides, (crmData.usuarios || [])) : [];
+    const comAjust = crmData ? aplicarOverridesComisiones(comRaw, comisionOverrides, (crmData.usuarios || []), pagosGastos2) : [];
     const comPend = comAjust.filter((c) => !pagosGastos2.find((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado)).reduce((s, c) => s + c.monto, 0);
     return baseFijo + vencidos + comPend;
     } catch(e) { console.error('gastosRealesMes error:', e); return 0; }
@@ -2502,7 +2589,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.07.22-3"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Re-sync folio */ React.createElement("button", { onClick: forzarResyncFolio, title: "Pago en CRM pero no en Contabilidad? Forzar re-sync de un folio", style: { marginLeft: 4, fontSize: 10, padding: "2px 8px", cursor: "pointer", background: "none", border: "1px solid #7c3aed", borderRadius: 5, color: "#7c3aed", fontWeight: 700 } }, "\uD83D\uDD04 Re-sync"), !crmData && loaded && /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, className: "btn btn-o btn-sm", style: { fontSize: 11 } }, "\u{1F50C} Conectar CRM"), /* @__PURE__ */ React.createElement("button", { onClick: toggleCurrency, title: currency === "MXN" ? "Ver en USD" : "Ver en MXN", className: "btn btn-o btn-sm", style: { fontSize: 11, minWidth: 60, fontFamily: "var(--mono)", fontWeight: 700, color: currency === "USD" ? "var(--am)" : "var(--tx2)" } }, loadingRate ? "\u23F3" : currency === "MXN" ? "\u{1F1F2}\u{1F1FD} MXN" : "\u{1F1FA}\u{1F1F8} USD"), currency === "USD" && usdRate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", whiteSpace: "nowrap" } }, "1 USD = ", fmt$(usdRate)), upcoming.length > 0 && /* @__PURE__ */ React.createElement("button", { className: `btn btn-sm ${upcoming.some((p) => p.isOverdue) ? "btn-d" : "btn-am"}`, onClick: () => setShowRem(true) }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0", " ", upcoming.length, " pendiente(s)")), /* @__PURE__ */ React.createElement("nav", { className: "nav" }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, className: `ntab ${tab === t.id ? "active" : ""}`, onClick: () => setTab(t.id), style: t.crm && crmData ? { color: tab === t.id ? "var(--pu)" : "var(--tx2)" } : {} }, t.icon, " ", t.label, t.crm && crmData && tab !== t.id && (() => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.07.22-4"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Re-sync folio */ React.createElement("button", { onClick: forzarResyncFolio, title: "Pago en CRM pero no en Contabilidad? Forzar re-sync de un folio", style: { marginLeft: 4, fontSize: 10, padding: "2px 8px", cursor: "pointer", background: "none", border: "1px solid #7c3aed", borderRadius: 5, color: "#7c3aed", fontWeight: 700 } }, "\uD83D\uDD04 Re-sync"), !crmData && loaded && /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, className: "btn btn-o btn-sm", style: { fontSize: 11 } }, "\u{1F50C} Conectar CRM"), /* @__PURE__ */ React.createElement("button", { onClick: toggleCurrency, title: currency === "MXN" ? "Ver en USD" : "Ver en MXN", className: "btn btn-o btn-sm", style: { fontSize: 11, minWidth: 60, fontFamily: "var(--mono)", fontWeight: 700, color: currency === "USD" ? "var(--am)" : "var(--tx2)" } }, loadingRate ? "\u23F3" : currency === "MXN" ? "\u{1F1F2}\u{1F1FD} MXN" : "\u{1F1FA}\u{1F1F8} USD"), currency === "USD" && usdRate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", whiteSpace: "nowrap" } }, "1 USD = ", fmt$(usdRate)), upcoming.length > 0 && /* @__PURE__ */ React.createElement("button", { className: `btn btn-sm ${upcoming.some((p) => p.isOverdue) ? "btn-d" : "btn-am"}`, onClick: () => setShowRem(true) }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0", " ", upcoming.length, " pendiente(s)")), /* @__PURE__ */ React.createElement("nav", { className: "nav" }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, className: `ntab ${tab === t.id ? "active" : ""}`, onClick: () => setTab(t.id), style: t.crm && crmData ? { color: tab === t.id ? "var(--pu)" : "var(--tx2)" } : {} }, t.icon, " ", t.label, t.crm && crmData && tab !== t.id && (() => {
     const cm = monthStr();
     const pag = /* @__PURE__ */ new Set([
       ...ingresos.filter((i) => i.date.startsWith(cm) && i.alumno).map((i) => i.alumno),

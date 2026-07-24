@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.07.23-9\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.07.24-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.07.23-9\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.07.24-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -600,7 +600,7 @@ function ModalRecordatorios({ pagos, onClose, onMarcarPagado, onEliminar }) {
       /* @__PURE__ */ React.createElement("div", null,
         /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u23F0 Recordatorio de Pagos"),
         /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3, textTransform: "capitalize" } }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" })),
-        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--tx3)", marginTop: 2, fontWeight: 700, letterSpacing: ".4px" } }, "BUILD v2026.07.23-9")
+        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--tx3)", marginTop: 2, fontWeight: 700, letterSpacing: ".4px" } }, "BUILD v2026.07.24-1")
       ),
       /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")
     ),
@@ -2569,6 +2569,9 @@ function App() {
   useEffect(() => {
     if (!loaded) return;
     const pagosReg = (crmData == null ? void 0 : crmData.pagosRegulares) || [];
+    const _matPorFolio = {};
+    ((crmData == null ? void 0 : crmData["matr\xEDculas"]) || []).forEach((m) => { _matPorFolio[String(m.folio)] = m; });
+    const _catDeP = (p) => { const mm = _matPorFolio[String(p.crmFolio)]; return mm && mm.pagoTipo === "unico" ? "Pago \xFAnico" : "Mensualidad"; };
     const pagosFolios = new Set(pagosReg.filter((p) => p.crmFolio != null).map((p) => String(p.crmFolio)));
     const excluidos = new Set((excludedCrmFolios || []).map(String));
     // IDENTIDAD POR PAGO (no por folio): antes, una vez que un folio tenía UN ingreso,
@@ -2653,7 +2656,7 @@ function App() {
         crmFolio: String(p.crmFolio),
         monto: montoIngreso,
         method: p.method || "cash",
-        cat: "Mensualidad",
+        cat: _catDeP(p),
         notas: p.notas || "",
         comm: (p.paqueteFolios&&p.paqueteFolios.length>1&&!p.paqueteSlave)?commIngreso:(p.commMP||0),
         ivaComm: 0,
@@ -2687,6 +2690,8 @@ function App() {
       if (p.editadoEn && (!ingreso._editadoEn || ingreso._editadoEn !== p.editadoEn)) return true;
       // Actualizar si el NOMBRE del alumno cambió en CRM (correcciones ortográficas) — comparación estable
       if (p.alumnoNombre && ingreso.alumno !== p.alumnoNombre) return true;
+      // Actualizar si la categoría (mensual/único) ya no corresponde al tipo de pago actual
+      if (ingreso.cat !== "Comisiones" && ingreso.cat !== _catDeP(p)) return true;
       // SEGURO para paquetes: si el ingreso tiene el montoFinal individual ($1500)
       // pero debería ser el total del paquete ($4500), actualizar.
       // Esta comparación es estable porque después del primer update el monto = suma = correcto.
@@ -2745,6 +2750,7 @@ function App() {
           cursoRef: p.curso || ingreso.cursoRef || "",
           monto: montoU,
           method: p.method || "cash",
+          cat: ingreso.cat === "Comisiones" ? ingreso.cat : _catDeP(p),
           notas: p.notas || "",
           comm: isPaqueteU ? commU : (p.commMP || 0),
           ivaComm: isPaqueteU ? 0 : (p.ivaMP || 0),
@@ -2776,7 +2782,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.07.23-9"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Re-sync folio */ React.createElement("button", { onClick: forzarResyncFolio, title: "Pago en CRM pero no en Contabilidad? Forzar re-sync de un folio", style: { marginLeft: 4, fontSize: 10, padding: "2px 8px", cursor: "pointer", background: "none", border: "1px solid #7c3aed", borderRadius: 5, color: "#7c3aed", fontWeight: 700 } }, "\uD83D\uDD04 Re-sync"), !crmData && loaded && /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, className: "btn btn-o btn-sm", style: { fontSize: 11 } }, "\u{1F50C} Conectar CRM"), /* @__PURE__ */ React.createElement("button", { onClick: toggleCurrency, title: currency === "MXN" ? "Ver en USD" : "Ver en MXN", className: "btn btn-o btn-sm", style: { fontSize: 11, minWidth: 60, fontFamily: "var(--mono)", fontWeight: 700, color: currency === "USD" ? "var(--am)" : "var(--tx2)" } }, loadingRate ? "\u23F3" : currency === "MXN" ? "\u{1F1F2}\u{1F1FD} MXN" : "\u{1F1FA}\u{1F1F8} USD"), currency === "USD" && usdRate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", whiteSpace: "nowrap" } }, "1 USD = ", fmt$(usdRate)), upcoming.length > 0 && /* @__PURE__ */ React.createElement("button", { className: `btn btn-sm ${upcoming.some((p) => p.isOverdue) ? "btn-d" : "btn-am"}`, onClick: () => setShowRem(true) }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0", " ", upcoming.length, " pendiente(s)")), /* @__PURE__ */ React.createElement("nav", { className: "nav" }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, className: `ntab ${tab === t.id ? "active" : ""}`, onClick: () => setTab(t.id), style: t.crm && crmData ? { color: tab === t.id ? "var(--pu)" : "var(--tx2)" } : {} }, t.icon, " ", t.label, t.crm && crmData && tab !== t.id && (() => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.07.24-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Re-sync folio */ React.createElement("button", { onClick: forzarResyncFolio, title: "Pago en CRM pero no en Contabilidad? Forzar re-sync de un folio", style: { marginLeft: 4, fontSize: 10, padding: "2px 8px", cursor: "pointer", background: "none", border: "1px solid #7c3aed", borderRadius: 5, color: "#7c3aed", fontWeight: 700 } }, "\uD83D\uDD04 Re-sync"), !crmData && loaded && /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, className: "btn btn-o btn-sm", style: { fontSize: 11 } }, "\u{1F50C} Conectar CRM"), /* @__PURE__ */ React.createElement("button", { onClick: toggleCurrency, title: currency === "MXN" ? "Ver en USD" : "Ver en MXN", className: "btn btn-o btn-sm", style: { fontSize: 11, minWidth: 60, fontFamily: "var(--mono)", fontWeight: 700, color: currency === "USD" ? "var(--am)" : "var(--tx2)" } }, loadingRate ? "\u23F3" : currency === "MXN" ? "\u{1F1F2}\u{1F1FD} MXN" : "\u{1F1FA}\u{1F1F8} USD"), currency === "USD" && usdRate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", whiteSpace: "nowrap" } }, "1 USD = ", fmt$(usdRate)), upcoming.length > 0 && /* @__PURE__ */ React.createElement("button", { className: `btn btn-sm ${upcoming.some((p) => p.isOverdue) ? "btn-d" : "btn-am"}`, onClick: () => setShowRem(true) }, upcoming.some((p) => p.isOverdue) ? "\u{1F6A8}" : "\u23F0", " ", upcoming.length, " pendiente(s)")), /* @__PURE__ */ React.createElement("nav", { className: "nav" }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, className: `ntab ${tab === t.id ? "active" : ""}`, onClick: () => setTab(t.id), style: t.crm && crmData ? { color: tab === t.id ? "var(--pu)" : "var(--tx2)" } : {} }, t.icon, " ", t.label, t.crm && crmData && tab !== t.id && (() => {
     const cm = monthStr();
     const pag = /* @__PURE__ */ new Set([
       ...ingresos.filter((i) => i.date.startsWith(cm) && i.alumno).map((i) => i.alumno),
@@ -2807,7 +2813,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.07.23-9\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.07.24-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

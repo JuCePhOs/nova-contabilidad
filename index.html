@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.08.11-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.08.11-3\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.08.11-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.08.11-3\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -185,6 +185,56 @@ const calcMP = (amount) => {
   const comm = +(n * MP_BASE).toFixed(2);
   const iva = +(comm * MP_IVA).toFixed(2);
   return { comm, iva, total: +(comm + iva).toFixed(2), net: +(n - comm - iva).toFixed(2) };
+};
+// ── Pagos mixtos (CRM guarda method = "mixto:cash+card") ─────────────────────
+// Un pago mixto NO tiene method === "card", pero sí genera comisión de terminal por
+// su parte con tarjeta. Al sumar la ficha "Comisiones MP" sobre todos los ingresos y
+// filtrar después por method === "card", los dos números no coincidían. Estos
+// ayudantes dan UNA sola definición de "cuánto entró por cada método".
+// Un pago SIN parte con tarjeta no puede arrastrar comisión: si en el CRM se cambió el
+// método y quedó un commMP viejo, aquí se pone en cero (misma fórmula en todas las pestañas).
+const _sinTerminal = (p) => {
+  const m = String((p && p.method) || "cash");
+  return m.startsWith("mixto") ? m.slice(6).split("+").indexOf("card") < 0 : m !== "card";
+};
+// Desglose del pago mixto tal como lo guarda el CRM (mixtoDetalle).
+const _mixDeP = (p) => {
+  const d = p && p.mixtoDetalle;
+  const arr = Array.isArray(d) ? d : (d && typeof d === "object" ? Object.values(d) : null);
+  if (!arr || !arr.length) return null;
+  return arr.filter(Boolean).map((x) => ({ m: String(x.m || ""), monto: parseFloat(x.monto) || 0 }));
+};
+const esMixto = (i) => String((i && i.method) || "").startsWith("mixto");
+const metodosDe = (i) => {
+  const m = String((i && i.method) || "cash");
+  return esMixto(i) ? m.slice(6).split("+").map((x) => x.trim()).filter(Boolean) : [m];
+};
+const tieneMetodo = (i, met) => metodosDe(i).indexOf(met) >= 0;
+// Monto que entró por un método concreto. Para mixtos se usa el desglose que manda el
+// CRM (i.mix); si el registro es viejo y no lo trae, la parte con tarjeta se deduce de
+// la comisión cobrada (comm = parte * 3.5%) y el resto va al otro método.
+const montoPorMetodo = (i, met) => {
+  const total = parseFloat((i && i.monto) || 0) || 0;
+  if (!esMixto(i)) return (i && i.method) === met ? total : 0;
+  const mix = Array.isArray(i.mix) ? i.mix : null;
+  if (mix) {
+    const hit = mix.filter((x) => x && x.m === met).reduce((s, x) => s + (parseFloat(x.monto) || 0), 0);
+    return +hit.toFixed(2);
+  }
+  const mets = metodosDe(i);
+  const base = parseFloat(i.comm || 0) || +(((parseFloat(i.totalDed || 0) || 0) / (1 + MP_IVA))).toFixed(2);
+  const parteCard = base > 0 ? +(base / MP_BASE).toFixed(2) : 0;
+  if (met === "card") return mets.indexOf("card") >= 0 ? Math.min(parteCard, total) : 0;
+  if (mets.indexOf(met) < 0) return 0;
+  return mets.indexOf("card") >= 0 ? +(total - Math.min(parteCard, total)).toFixed(2) : +(total / mets.length).toFixed(2);
+};
+const conTerminal = (i) => tieneMetodo(i, "card");
+// Comisión real del ingreso: solo existe si hubo cobro con terminal.
+const comisionDe = (i) => conTerminal(i) ? (parseFloat((i && i.totalDed) || 0) || 0) : 0;
+const etiquetaMetodo = (i) => {
+  if (!esMixto(i)) return i.method === "cash" ? "\u{1F4B5} Efectivo" : i.method === "transfer" ? "\u{1F3E6} Transf." : "\u{1F4B3} Terminal";
+  const N = { cash: "\u{1F4B5} Efectivo", transfer: "\u{1F3E6} Transf.", card: "\u{1F4B3} Terminal" };
+  return "\u{1F500} Mixto: " + metodosDe(i).map((m) => (N[m] || m) + " " + fmt$(montoPorMetodo(i, m))).join(" + ");
 };
 async function stor(cmd, key, val) {
   const k = "acad_v1_" + key;
@@ -699,7 +749,7 @@ function ModalRecordatorios({ pagos, onClose, onMarcarPagado, onEliminar }) {
       /* @__PURE__ */ React.createElement("div", null,
         /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u23F0 Recordatorio de Pagos"),
         /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3, textTransform: "capitalize" } }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" })),
-        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--tx3)", marginTop: 2, fontWeight: 700, letterSpacing: ".4px" } }, "BUILD v2026.08.11-1")
+        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--tx3)", marginTop: 2, fontWeight: 700, letterSpacing: ".4px" } }, "BUILD v2026.08.11-3")
       ),
       /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")
     ),
@@ -991,7 +1041,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
     { label: "Gastos Pagados", val: fmt$(gastoT), sub: `${gastMes.length} pagos`, stripe: "var(--rd)", vcol: "var(--rd)", k: "gastos" },
     { label: "Balance del Mes", val: (balance >= 0 ? "+" : "") + fmt$(balance), sub: balance >= 0 ? "Super\xE1vit" : "D\xE9ficit", stripe: balance >= 0 ? "var(--gr)" : "var(--rd)", vcol: balance >= 0 ? "var(--gr)" : "var(--rd)", k: "balance" },
     { label: "\u{1F393} Clases diagn\xF3stico", val: fmt$(incMes.filter((i) => i.diagId || i.cat === "Clase diagn\xF3stico").reduce((s, i) => s + (i.monto || 0), 0)), sub: incMes.filter((i) => i.diagId || i.cat === "Clase diagn\xF3stico").length + " este mes", stripe: "#14b8a6", vcol: "#14b8a6", k: "diagM" }
-  ].map(({ label, val, sub, stripe, vcol, k }) => /* @__PURE__ */ React.createElement("div", { key: label, className: "scard", title: "Clic: ver de d\xF3nde sale esta cifra", onClick: () => setDet(k), style: { "--stripe": stripe, "--vcol": vcol, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "slabel" }, label), /* @__PURE__ */ React.createElement("div", { className: "sval" }, val), /* @__PURE__ */ React.createElement("div", { className: "ssub" }, sub)))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F4CA} Ingresos vs Gastos (6 meses)"), /* @__PURE__ */ React.createElement(MiniBarChart, { data: chartData, height: 200 })), metodos.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F4B3} M\xE9todo de Pago este mes"), /* @__PURE__ */ React.createElement(MiniPieChart, { data: metodos, colors: PIE, height: 200 }))), ingresos.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card", style: { marginTop: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F550} \xDAltimos 5 Ingresos"), /* @__PURE__ */ React.createElement("div", { className: "twrap" }, /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", null, "Fecha"), /* @__PURE__ */ React.createElement("th", null, "Descripci\xF3n"), /* @__PURE__ */ React.createElement("th", null, "Alumno"), /* @__PURE__ */ React.createElement("th", null, "M\xE9todo"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "Cobrado"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "En Cuenta"))), /* @__PURE__ */ React.createElement("tbody", null, [...ingresos].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5).map((i) => /* @__PURE__ */ React.createElement("tr", { key: i.id }, /* @__PURE__ */ React.createElement("td", { className: "mono", style: { fontSize: 11, color: "var(--tx2)" } }, fmtD(i.date)), /* @__PURE__ */ React.createElement("td", { style: { fontWeight: 500 } }, i.desc), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--tx2)", fontSize: 12 } }, i.alumno || "\u2014", i.crmFolio && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: 4, fontSize: 9, color: "var(--pu)" } }, "CRM")), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("span", { className: `badge ${i.method === "cash" ? "b-gr" : i.method === "transfer" ? "b-ac" : "b-pu"}` }, i.method === "cash" ? "\u{1F4B5} Efectivo" : i.method === "transfer" ? "\u{1F3E6} Transferencia" : "\u{1F4B3} Terminal")), /* @__PURE__ */ React.createElement("td", { className: "mono tr" }, fmt$(i.monto)), /* @__PURE__ */ React.createElement("td", { className: "mono tr tg", style: { fontWeight: 600 } }, fmt$(i.neto)))))))), crmData ? (() => {
+  ].map(({ label, val, sub, stripe, vcol, k }) => /* @__PURE__ */ React.createElement("div", { key: label, className: "scard", title: "Clic: ver de d\xF3nde sale esta cifra", onClick: () => setDet(k), style: { "--stripe": stripe, "--vcol": vcol, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "slabel" }, label), /* @__PURE__ */ React.createElement("div", { className: "sval" }, val), /* @__PURE__ */ React.createElement("div", { className: "ssub" }, sub)))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F4CA} Ingresos vs Gastos (6 meses)"), /* @__PURE__ */ React.createElement(MiniBarChart, { data: chartData, height: 200 })), metodos.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F4B3} M\xE9todo de Pago este mes"), /* @__PURE__ */ React.createElement(MiniPieChart, { data: metodos, colors: PIE, height: 200 }))), ingresos.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card", style: { marginTop: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F550} \xDAltimos 5 Ingresos"), /* @__PURE__ */ React.createElement("div", { className: "twrap" }, /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", null, "Fecha"), /* @__PURE__ */ React.createElement("th", null, "Descripci\xF3n"), /* @__PURE__ */ React.createElement("th", null, "Alumno"), /* @__PURE__ */ React.createElement("th", null, "M\xE9todo"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "Cobrado"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "En Cuenta"))), /* @__PURE__ */ React.createElement("tbody", null, [...ingresos].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5).map((i) => /* @__PURE__ */ React.createElement("tr", { key: i.id }, /* @__PURE__ */ React.createElement("td", { className: "mono", style: { fontSize: 11, color: "var(--tx2)" } }, fmtD(i.date)), /* @__PURE__ */ React.createElement("td", { style: { fontWeight: 500 } }, i.desc), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--tx2)", fontSize: 12 } }, i.alumno || "\u2014", i.crmFolio && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: 4, fontSize: 9, color: "var(--pu)" } }, "CRM")), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("span", { className: `badge ${esMixto(i) ? "b-am" : i.method === "cash" ? "b-gr" : i.method === "transfer" ? "b-ac" : "b-pu"}`, title: etiquetaMetodo(i) }, esMixto(i) ? etiquetaMetodo(i) : i.method === "cash" ? "\u{1F4B5} Efectivo" : i.method === "transfer" ? "\u{1F3E6} Transferencia" : "\u{1F4B3} Terminal")), /* @__PURE__ */ React.createElement("td", { className: "mono tr" }, fmt$(i.monto)), /* @__PURE__ */ React.createElement("td", { className: "mono tr tg", style: { fontWeight: 600 } }, fmt$((parseFloat(i.monto) || 0) - comisionDe(i))))))))), crmData ? (() => {
     const alumnos = crmAlumnos(crmData);
     const cm2 = monthStr();
     const morosos = matriculasPendientesCRM(crmData, cm2);
@@ -1083,16 +1133,19 @@ function Ingresos({ ingresos, setIngresos, crmData, showMoney, onDelete, exclude
     setSelected([]);
   }
   const lista = useMemo(
-    () => ingresos.filter((i) => !mes || i.date.startsWith(mes)).filter((i) => !seg || (seg === "diag" ? (i.diagId || i.cat === "Clase diagn\xF3stico") : seg === "ant" ? esCRM(i) && !esNuevo(i) && !i.diagId : esNuevo(i))).filter((i) => !met || i.method === met).filter((i) => !q || i.desc.toLowerCase().includes(q.toLowerCase()) || (i.alumno || "").toLowerCase().includes(q.toLowerCase()) || String(i.crmFolio || "").includes(q.trim().replace("#", ""))).sort((a, b) => b.date.localeCompare(a.date)),
+    () => ingresos.filter((i) => !mes || i.date.startsWith(mes)).filter((i) => !seg || (seg === "diag" ? (i.diagId || i.cat === "Clase diagn\xF3stico") : seg === "ant" ? esCRM(i) && !esNuevo(i) && !i.diagId : esNuevo(i))).filter((i) => !met || tieneMetodo(i, met)).filter((i) => !q || i.desc.toLowerCase().includes(q.toLowerCase()) || (i.alumno || "").toLowerCase().includes(q.toLowerCase()) || String(i.crmFolio || "").includes(q.trim().replace("#", ""))).sort((a, b) => b.date.localeCompare(a.date)),
     [ingresos, mes, q, seg, met, folioNuevos]
   );
+  // Las fichas por método suman la PARTE de cada método (un pago mixto aporta a los dos)
+  // y la comisión solo cuenta cuando hubo cobro con terminal. Así la ficha "Comisiones MP"
+  // da lo mismo antes y después de filtrar por terminal.
   const tots = useMemo(() => ({
     bruto: lista.reduce((s, i) => s + i.monto, 0),
-    neto: lista.reduce((s, i) => s + i.neto, 0),
-    comm: lista.reduce((s, i) => s + (i.totalDed || 0), 0),
-    cash: lista.filter((i) => i.method === "cash").reduce((s, i) => s + i.monto, 0),
-    trf: lista.filter((i) => i.method === "transfer").reduce((s, i) => s + i.monto, 0),
-    card: lista.filter((i) => i.method === "card").reduce((s, i) => s + i.monto, 0)
+    neto: lista.reduce((s, i) => s + ((parseFloat(i.monto) || 0) - comisionDe(i)), 0),
+    comm: lista.reduce((s, i) => s + comisionDe(i), 0),
+    cash: lista.reduce((s, i) => s + montoPorMetodo(i, "cash"), 0),
+    trf: lista.reduce((s, i) => s + montoPorMetodo(i, "transfer"), 0),
+    card: lista.reduce((s, i) => s + montoPorMetodo(i, "card"), 0)
   }), [lista]);
   async function guardar(inc) {
     let upd;
@@ -1212,7 +1265,7 @@ function Ingresos({ ingresos, setIngresos, crmData, showMoney, onDelete, exclude
     { l: "\u{1F4B5} Efectivo", v: fmt$(tots.cash), c: "var(--tx2)", k: "cash", tip: "Clic: ver solo pagos en efectivo" },
     { l: "\u{1F3E6} Transferencia", v: fmt$(tots.trf), c: "var(--ac)", k: "transfer", tip: "Clic: ver solo transferencias (concilia con tu cuenta bancaria)" },
     { l: "\u{1F4B3} Terminal MP", v: fmt$(tots.card), c: "var(--pu)", k: "card", tip: "Clic: ver solo pagos con terminal MP" }
-  ].map(({ l, v, c, k, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip, onClick: () => setMet(k === null ? null : (met === k ? null : k)), style: { cursor: "pointer", outline: k !== null && met === k ? "2px solid " + c : "none", outlineOffset: 2 } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c } }, v)))), destiempo && (destiempo.adelantado.length > 0 || destiempo.atrasado.length > 0) && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", border: "1px solid var(--am)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, lineHeight: 1.7 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, marginBottom: 4, color: "var(--am)" } }, "\u21C4 Pagos a destiempo en " + mes), destiempo.adelantado.length > 0 && /* @__PURE__ */ React.createElement("div", null, "\u2022 Entr\xF3 este mes pero cubre otro: ", /* @__PURE__ */ React.createElement("strong", null, fmt$(destiempo.adelantado$)), " \u2014 ", destiempo.adelantado.map((i) => (i.alumno || "?") + " \u2192 " + i.mesCorrespondiente).join(", ")), destiempo.atrasado.length > 0 && /* @__PURE__ */ React.createElement("div", null, "\u2022 Cubre este mes pero entr\xF3 en otro: ", /* @__PURE__ */ React.createElement("strong", null, fmt$(destiempo.atrasado$)), " \u2014 ", destiempo.atrasado.map((i) => (i.alumno || "?") + " \u2190 " + (i.date || "").slice(0, 7)).join(", ")), /* @__PURE__ */ React.createElement("div", { style: { color: "var(--tx3)", marginTop: 4, fontSize: 11 } }, "Contabilidad cuenta por fecha de cobro; CRM por mes cubierto. Esta es la diferencia.")), /* @__PURE__ */ React.createElement("div", { className: "fbar" }, /* @__PURE__ */ React.createElement("input", { className: "finput", type: "month", value: mes, onChange: (e) => setMes(e.target.value) }), /* @__PURE__ */ React.createElement("input", { className: "finput", type: "text", placeholder: "\u{1F50D} Buscar descripci\xF3n, alumno o folio...", value: q, onChange: (e) => setQ(e.target.value), style: { flex: 1, minWidth: 200 } }), mes && /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setMes("") }, "Todos los meses")), selected.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", background: "var(--s2)", border: "1px solid var(--br)", borderRadius: 10, padding: "10px 14px", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 13 } }, `${selected.length} seleccionado(s)`), /* @__PURE__ */ React.createElement("select", { className: "finput", value: bulkMethod, onChange: (e) => setBulkMethod(e.target.value), style: { width: 200 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Cambiar m\xE9todo de pago a\u2026"), /* @__PURE__ */ React.createElement("option", { value: "cash" }, "\u{1F4B5} Efectivo"), /* @__PURE__ */ React.createElement("option", { value: "transfer" }, "\u{1F3E6} Transferencia"), /* @__PURE__ */ React.createElement("option", { value: "card" }, "\u{1F4B3} Tarjeta / Terminal MP")), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p btn-sm", disabled: !bulkMethod, onClick: aplicarMetodoMasivo }, "Aplicar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-d btn-sm", onClick: eliminarMasivo }, "\u{1F5D1} Eliminar seleccionados"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setSelected([]) }, "Cancelar selecci\xF3n")), lista.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, /* @__PURE__ */ React.createElement("div", { className: "empty-icon" }, "\u{1F4B0}"), /* @__PURE__ */ React.createElement("div", { className: "empty-ttl" }, "Sin ingresos"), /* @__PURE__ */ React.createElement("div", { className: "empty-sub" }, "Registra tu primer ingreso con el bot\xF3n de arriba")) : /* @__PURE__ */ React.createElement("div", { className: "card", style: { padding: 0 } }, /* @__PURE__ */ React.createElement("div", { className: "twrap" }, /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { style: { width: 32 } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: selected.length === lista.length && lista.length > 0, onChange: (e) => toggleSelAll(e.target.checked) })), /* @__PURE__ */ React.createElement("th", null, "Fecha"), /* @__PURE__ */ React.createElement("th", null, "Descripci\xF3n"), /* @__PURE__ */ React.createElement("th", null, "Alumno"), /* @__PURE__ */ React.createElement("th", null, "Categ."), /* @__PURE__ */ React.createElement("th", null, "M\xE9todo"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "Cobrado"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "Comisi\xF3n"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "En Cuenta"), /* @__PURE__ */ React.createElement("th", null))), /* @__PURE__ */ React.createElement("tbody", null, lista.map((i) => /* @__PURE__ */ React.createElement("tr", { key: i.id }, /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: selected.includes(i.id), onChange: () => toggleSel(i.id) })), /* @__PURE__ */ React.createElement("td", { className: "mono", style: { fontSize: 11 } }, fmtD(i.date), (i.mesCorrespondiente && i.mesCorrespondiente !== (i.date || "").slice(0, 7)) ? /* @__PURE__ */ React.createElement("div", { style: { marginTop: 3 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-am", style: { fontSize: 9 }, title: "El dinero entr\xF3 en " + (i.date || "").slice(0, 7) + " pero cubre la mensualidad de " + i.mesCorrespondiente }, "\u21C4 cubre " + i.mesCorrespondiente)) : null), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 500 } }, i.desc), i.notas && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginTop: 2 } }, i.notas)), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--tx2)", fontSize: 12 } }, i.alumno || "\u2014"), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("span", { className: "badge b-gy" }, i.cat)), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("span", { className: `badge ${i.method === "cash" ? "b-gr" : i.method === "transfer" ? "b-ac" : "b-pu"}` }, i.method === "cash" ? "\u{1F4B5} Efectivo" : i.method === "transfer" ? "\u{1F3E6} Transf." : "\u{1F4B3} Terminal")), /* @__PURE__ */ React.createElement("td", { className: "mono tr" }, fmt$(i.monto)), /* @__PURE__ */ React.createElement("td", { className: "mono tr", style: { color: i.method === "card" ? "var(--rd)" : "var(--tx3)" } }, i.method === "card" ? `-${fmt$(i.totalDed)}` : "\u2014"), /* @__PURE__ */ React.createElement("td", { className: "mono tr tg", style: { fontWeight: 600 } }, fmt$(i.neto)), /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setEditando(i), title: "Editar" }, "\u270F\uFE0F"), " ", /* @__PURE__ */ React.createElement("button", { className: "btn btn-d btn-sm", onClick: () => del(i.id) }, "\u{1F5D1}")))))))));
+  ].map(({ l, v, c, k, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip, onClick: () => setMet(k === null ? null : (met === k ? null : k)), style: { cursor: "pointer", outline: k !== null && met === k ? "2px solid " + c : "none", outlineOffset: 2 } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c } }, v)))), destiempo && (destiempo.adelantado.length > 0 || destiempo.atrasado.length > 0) && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", border: "1px solid var(--am)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, lineHeight: 1.7 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, marginBottom: 4, color: "var(--am)" } }, "\u21C4 Pagos a destiempo en " + mes), destiempo.adelantado.length > 0 && /* @__PURE__ */ React.createElement("div", null, "\u2022 Entr\xF3 este mes pero cubre otro: ", /* @__PURE__ */ React.createElement("strong", null, fmt$(destiempo.adelantado$)), " \u2014 ", destiempo.adelantado.map((i) => (i.alumno || "?") + " \u2192 " + i.mesCorrespondiente).join(", ")), destiempo.atrasado.length > 0 && /* @__PURE__ */ React.createElement("div", null, "\u2022 Cubre este mes pero entr\xF3 en otro: ", /* @__PURE__ */ React.createElement("strong", null, fmt$(destiempo.atrasado$)), " \u2014 ", destiempo.atrasado.map((i) => (i.alumno || "?") + " \u2190 " + (i.date || "").slice(0, 7)).join(", ")), /* @__PURE__ */ React.createElement("div", { style: { color: "var(--tx3)", marginTop: 4, fontSize: 11 } }, "Contabilidad cuenta por fecha de cobro; CRM por mes cubierto. Esta es la diferencia.")), /* @__PURE__ */ React.createElement("div", { className: "fbar" }, /* @__PURE__ */ React.createElement("input", { className: "finput", type: "month", value: mes, onChange: (e) => setMes(e.target.value) }), /* @__PURE__ */ React.createElement("input", { className: "finput", type: "text", placeholder: "\u{1F50D} Buscar descripci\xF3n, alumno o folio...", value: q, onChange: (e) => setQ(e.target.value), style: { flex: 1, minWidth: 200 } }), mes && /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setMes("") }, "Todos los meses")), selected.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", background: "var(--s2)", border: "1px solid var(--br)", borderRadius: 10, padding: "10px 14px", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 13 } }, `${selected.length} seleccionado(s)`), /* @__PURE__ */ React.createElement("select", { className: "finput", value: bulkMethod, onChange: (e) => setBulkMethod(e.target.value), style: { width: 200 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Cambiar m\xE9todo de pago a\u2026"), /* @__PURE__ */ React.createElement("option", { value: "cash" }, "\u{1F4B5} Efectivo"), /* @__PURE__ */ React.createElement("option", { value: "transfer" }, "\u{1F3E6} Transferencia"), /* @__PURE__ */ React.createElement("option", { value: "card" }, "\u{1F4B3} Tarjeta / Terminal MP")), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p btn-sm", disabled: !bulkMethod, onClick: aplicarMetodoMasivo }, "Aplicar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-d btn-sm", onClick: eliminarMasivo }, "\u{1F5D1} Eliminar seleccionados"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setSelected([]) }, "Cancelar selecci\xF3n")), lista.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, /* @__PURE__ */ React.createElement("div", { className: "empty-icon" }, "\u{1F4B0}"), /* @__PURE__ */ React.createElement("div", { className: "empty-ttl" }, "Sin ingresos"), /* @__PURE__ */ React.createElement("div", { className: "empty-sub" }, "Registra tu primer ingreso con el bot\xF3n de arriba")) : /* @__PURE__ */ React.createElement("div", { className: "card", style: { padding: 0 } }, /* @__PURE__ */ React.createElement("div", { className: "twrap" }, /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { style: { width: 32 } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: selected.length === lista.length && lista.length > 0, onChange: (e) => toggleSelAll(e.target.checked) })), /* @__PURE__ */ React.createElement("th", null, "Fecha"), /* @__PURE__ */ React.createElement("th", null, "Descripci\xF3n"), /* @__PURE__ */ React.createElement("th", null, "Alumno"), /* @__PURE__ */ React.createElement("th", null, "Categ."), /* @__PURE__ */ React.createElement("th", null, "M\xE9todo"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "Cobrado"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "Comisi\xF3n"), /* @__PURE__ */ React.createElement("th", { className: "tr" }, "En Cuenta"), /* @__PURE__ */ React.createElement("th", null))), /* @__PURE__ */ React.createElement("tbody", null, lista.map((i) => /* @__PURE__ */ React.createElement("tr", { key: i.id }, /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: selected.includes(i.id), onChange: () => toggleSel(i.id) })), /* @__PURE__ */ React.createElement("td", { className: "mono", style: { fontSize: 11 } }, fmtD(i.date), (i.mesCorrespondiente && i.mesCorrespondiente !== (i.date || "").slice(0, 7)) ? /* @__PURE__ */ React.createElement("div", { style: { marginTop: 3 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-am", style: { fontSize: 9 }, title: "El dinero entr\xF3 en " + (i.date || "").slice(0, 7) + " pero cubre la mensualidad de " + i.mesCorrespondiente }, "\u21C4 cubre " + i.mesCorrespondiente)) : null), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 500 } }, i.desc), i.notas && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginTop: 2 } }, i.notas)), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--tx2)", fontSize: 12 } }, i.alumno || "\u2014"), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("span", { className: "badge b-gy" }, i.cat)), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("span", { className: `badge ${esMixto(i) ? "b-am" : i.method === "cash" ? "b-gr" : i.method === "transfer" ? "b-ac" : "b-pu"}`, title: etiquetaMetodo(i) }, etiquetaMetodo(i))), /* @__PURE__ */ React.createElement("td", { className: "mono tr" }, fmt$(i.monto)), /* @__PURE__ */ React.createElement("td", { className: "mono tr", style: { color: conTerminal(i) ? "var(--rd)" : "var(--tx3)" } }, conTerminal(i) ? `-${fmt$(comisionDe(i))}` : "\u2014"), /* @__PURE__ */ React.createElement("td", { className: "mono tr tg", style: { fontWeight: 600 } }, fmt$((parseFloat(i.monto) || 0) - comisionDe(i))), /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setEditando(i), title: "Editar" }, "\u270F\uFE0F"), " ", /* @__PURE__ */ React.createElement("button", { className: "btn btn-d btn-sm", onClick: () => del(i.id) }, "\u{1F5D1}")))))))));
 }
 function AlumnosCRM({ crmData, ingresos, setIngresos }) {
   const [q, setQ] = useState("");
@@ -2173,6 +2226,18 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
                 React.createElement("strong", { style: { color: col, fontSize: 15 } }, prog.n), " / ", prog.meta, " contratos",
                 prog.logrado ? React.createElement("span", { style: { color: "var(--gr)", marginLeft: 6 } }, "\u2713 +", fmt$(prog.extra), " extra") : React.createElement("span", { style: { color: "var(--tx3)", marginLeft: 6 } }, "faltan ", prog.faltan)),
               (rt.cursosExcluidos || []).length > 0 && React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginBottom: 8 } }, "No cuentan: ", rt.cursosExcluidos.join(", ")),
+              prog.n > 0 && React.createElement("details", { style: { marginBottom: 8 } },
+                React.createElement("summary", { style: { cursor: "pointer", fontSize: 11, color: "var(--tx2)" } }, "Ver folios que cuentan (", prog.n, ")"),
+                React.createElement("div", { style: { marginTop: 6, maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 } },
+                  prog.folios.map((fo) => {
+                    const mm = (((crmData || {})["matr\xEDculas"]) || []).find((x) => String(x.folio) === String(fo)) || {};
+                    return React.createElement("div", { key: fo, style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11, background: "var(--s1)", borderRadius: 6, padding: "4px 8px" } },
+                      React.createElement("span", null, "#", fo, " \u00B7 ", mm.alumno || ""),
+                      React.createElement("span", { style: { color: "var(--tx3)" } }, mm.curso || "", " \u00B7 ", String(mm.fechaISO || "").slice(0, 10))
+                    );
+                  })
+                )
+              ),
               React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
                 React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10 }, onClick: () => setEditandoReto(rt) }, "\u270E Editar"),
                 React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10 }, onClick: () => toggleReto(rt.id) }, inactivo ? "\u25B6 Activar" : "\u23F8 Pausar"),
@@ -2438,7 +2503,7 @@ function Reportes({ ingresos: ingresosAll, pagosGastos: pagosGastosAll, crmData 
   const P2 = ["#F46B6B", "#FB923C", "#F5C147", "#34D399", "#60A5FA", "#A78BFA", "#F472B6", "#94A3B8"];
   const totInc = ingresos.reduce((s, i) => s + i.neto, 0);
   const totGst = pagosGastos2.reduce((s, g) => s + g.monto, 0);
-  const totComm = ingresos.filter((i) => i.method === "card").reduce((s, i) => s + (i.totalDed || 0), 0);
+  const totComm = ingresos.reduce((s, i) => s + comisionDe(i), 0);
   const Tip = ({ active, payload, label }) => active && (payload == null ? void 0 : payload.length) ? /* @__PURE__ */ React.createElement("div", { className: "ctooltip" }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 4 } }, label), payload.map((p, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { color: p.color } }, p.name, ": ", fmt$(p.value)))) : null;
   return /* @__PURE__ */ React.createElement("div", null, det && (() => { const F = fmt$;
     if (det === "brutoH") return React.createElement(FichaDetalle, { titulo: "\u{1F4B0} Ingresos brutos hist\xF3ricos", cols: ["Fecha", "Concepto", "Monto"], rows: ingresos.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).map((i) => [String(i.date || ""), i.desc || "", F(i.monto || 0)]), total: F(ingresos.reduce((s, i) => s + (i.monto || 0), 0)), onClose: () => setDet(null) });
@@ -2517,14 +2582,14 @@ function Exportar({ ingresos, pagosGastos: pagosGastos2, gastosFijos, crmData })
           ["Ingresos Netos (en cuenta)", mInc.reduce((s, i) => s + i.neto, 0)],
           ["Total Gastos Pagados", mGst.reduce((s, g) => s + g.monto, 0)],
           ["Balance del Mes", mInc.reduce((s, i) => s + i.neto, 0) - mGst.reduce((s, g) => s + g.monto, 0)],
-          ["Comisiones MP del Mes", mInc.filter((i) => i.method === "card").reduce((s, i) => s + (i.totalDed || 0), 0)],
+          ["Comisiones MP del Mes", mInc.reduce((s, i) => s + comisionDe(i), 0)],
           [""],
           ["\u2550\u2550\u2550 HIST\xD3RICO TOTAL \u2550\u2550\u2550"],
           ["Total Ingresos Brutos", ingresos.reduce((s, i) => s + i.monto, 0)],
           ["Total Ingresos Netos", ingresos.reduce((s, i) => s + i.neto, 0)],
           ["Total Gastos Registrados", pagosGastos2.reduce((s, g) => s + g.monto, 0)],
           ["Balance Total", ingresos.reduce((s, i) => s + i.neto, 0) - pagosGastos2.reduce((s, g) => s + g.monto, 0)],
-          ["Total Comisiones MP", ingresos.filter((i) => i.method === "card").reduce((s, i) => s + (i.totalDed || 0), 0)],
+          ["Total Comisiones MP", ingresos.reduce((s, i) => s + comisionDe(i), 0)],
           [""],
           ["\u2550\u2550\u2550 INGRESOS POR M\xC9TODO (HIST\xD3RICO) \u2550\u2550\u2550"],
           ["Efectivo", ingresos.filter((i) => i.method === "cash").reduce((s, i) => s + i.monto, 0)],
@@ -3128,9 +3193,10 @@ function App() {
         cat: _catDeP(p),
         mesCorrespondiente: _mesCubreDeP(p),
         notas: p.notas || "",
-        comm: (p.paqueteFolios&&p.paqueteFolios.length>1&&!p.paqueteSlave)?commIngreso:(p.commMP||0),
+        comm: _sinTerminal(p) ? 0 : ((p.paqueteFolios&&p.paqueteFolios.length>1&&!p.paqueteSlave)?commIngreso:(p.commMP||0)),
         ivaComm: 0,
-        totalDed: commIngreso,
+        totalDed: _sinTerminal(p) ? 0 : commIngreso,
+        mix: _mixDeP(p),
         // FIX: para paquetes, el neto debe calcularse sobre el TOTAL del paquete (montoIngreso - commIngreso),
         // NO usar p.neto (que es el neto INDIVIDUAL de un solo folio calculado en CRM sobre su parte, ej. $850 de $5100).
         // Ese bug hacía que "en cuenta" mostrara 1/6 del neto real mientras la comisión sí era del total.
@@ -3164,6 +3230,11 @@ function App() {
       if (ingreso.cat !== "Comisiones" && ingreso.cat !== _catDeP(p)) return true;
       // Actualizar si el mes que cubre el pago cambi\xF3 en CRM (o nunca se hab\xEDa guardado)
       if ((ingreso.mesCorrespondiente || "") !== _mesCubreDeP(p)) return true;
+      // Comisi\xF3n colgada: el pago ya no tiene parte con terminal pero el ingreso sigue
+      // arrastrando totalDed (era lo que descuadraba la ficha "Comisiones MP").
+      if (_sinTerminal(p) && (ingreso.totalDed || 0) !== 0) return true;
+      // Desglose del pago mixto todav\xEDa no guardado en el ingreso
+      if (_mixDeP(p) && !Array.isArray(ingreso.mix)) return true;
       // SEGURO para paquetes: si el ingreso tiene el montoFinal individual ($1500)
       // pero debería ser el total del paquete ($4500), actualizar.
       // Esta comparación es estable porque después del primer update el monto = suma = correcto.
@@ -3220,9 +3291,10 @@ function App() {
           cat: ingreso.cat === "Comisiones" ? ingreso.cat : _catDeP(p),
           mesCorrespondiente: _mesCubreDeP(p),
           notas: p.notas || "",
-          comm: isPaqueteU ? commU : (p.commMP || 0),
-          ivaComm: isPaqueteU ? 0 : (p.ivaMP || 0),
-          totalDed: commU,
+          comm: _sinTerminal(p) ? 0 : (isPaqueteU ? commU : (p.commMP || 0)),
+          ivaComm: _sinTerminal(p) ? 0 : (isPaqueteU ? 0 : (p.ivaMP || 0)),
+          totalDed: _sinTerminal(p) ? 0 : commU,
+          mix: _mixDeP(p),
           neto: netoU,
           _editadoEn: p.editadoEn,
           _actualizadoEn: (/* @__PURE__ */ new Date()).toISOString()
@@ -3290,7 +3362,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.08.11-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.08.11-3"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -3326,7 +3398,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.08.11-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.08.11-3\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

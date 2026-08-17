@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.08.14-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.08.17-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.08.14-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.08.17-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -786,7 +786,7 @@ function ModalRecordatorios({ pagos, onClose, onMarcarPagado, onEliminar }) {
       /* @__PURE__ */ React.createElement("div", null,
         /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u23F0 Recordatorio de Pagos"),
         /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3, textTransform: "capitalize" } }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" })),
-        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--tx3)", marginTop: 2, fontWeight: 700, letterSpacing: ".4px" } }, "BUILD v2026.08.14-1")
+        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--tx3)", marginTop: 2, fontWeight: 700, letterSpacing: ".4px" } }, "BUILD v2026.08.17-1")
       ),
       /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")
     ),
@@ -1831,9 +1831,42 @@ function ModalConfirmarComision({ comision, onSave, onClose }) {
   };
   return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u2705 Confirmar Pago de Comisi\xF3n"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, comision.nombreUsuario), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } }, comision.count, " contrato", comision.count !== 1 ? "s" : "", " creado", comision.count !== 1 ? "s" : "", " en ", mesLabel(comision.mesGanado)), /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 22, fontWeight: 800, marginTop: 8, color: "var(--gr)" } }, fmt$(comision.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Folios: ", comision.folios.join(", "))), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago (liquidaci\xF3n)"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 8 } }, "Este monto se registrar\xE1 como gasto en ", /* @__PURE__ */ React.createElement("strong", null, mesLabel(comision.mesPago)), " (mes en que sale el dinero de la cuenta)."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g", onClick: () => onSave(fecha) }, "\u2713 Confirmar Pago"))));
 }
+// Edición de un pago a instructor ya registrado: fecha, monto y notas, más la opción de
+// deshacerlo. Hacía falta porque un instructor pidió su pago en el mismo mes en que generó
+// las horas, y el registro quedaba fijo en el día 10 del mes siguiente sin forma de tocarlo.
+function ModalEditarPagoInstructor({ pago, registro, onSave, onDelete, onClose }) {
+  const [fecha, setFecha] = useState(registro.fecha || registro.date || todayStr());
+  const [monto, setMonto] = useState(String(registro.monto != null ? registro.monto : ""));
+  const [notas, setNotas] = useState(registro.notas || "");
+  const calculado = pago ? pago.monto : null;
+  function guardar() {
+    const v = parseFloat(monto);
+    if (!(v >= 0)) { alert("Monto inv\xE1lido."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) { alert("Fecha inv\xE1lida."); return; }
+    onSave({ fecha, date: fecha, monto: v, notas });
+  }
+  return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } },
+    /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u270E Editar pago a instructor"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")),
+    /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 16 } },
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, (pago && pago.nombre) || registro.desc),
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } }, "Horas de ", mesLabelGlobal(registro.mes || (pago && pago.mes) || monthStr())),
+      calculado != null && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Calculado por horas: ", fmt$(calculado))),
+    /* @__PURE__ */ React.createElement("div", { className: "fgrid" },
+      /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) })),
+      /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Monto pagado"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "number", step: "0.01", min: "0", value: monto, onChange: (e) => setMonto(e.target.value) })),
+      /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Notas"), /* @__PURE__ */ React.createElement("textarea", { className: "finp", rows: 2, value: notas, onChange: (e) => setNotas(e.target.value), placeholder: "Motivo del ajuste, adelanto, etc." }))),
+    /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 12 } }, "El dinero se cuenta por la fecha de pago; las horas siguen perteneciendo a su mes."),
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "space-between", marginTop: 18, flexWrap: "wrap" } },
+      /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { color: "var(--rd)", borderColor: "rgba(244,107,107,.4)" }, onClick: onDelete }, "\u21A9\uFE0F Deshacer pago"),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10 } },
+        /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"),
+        /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: guardar }, "Guardar")))));
+}
 function ModalConfirmarPagoInstructor({ pago, onSave, onClose }) {
-  // Se propone el día 10 del mes en que toca liquidar (mes siguiente al de las horas).
-  const [fecha, setFecha] = useState(nextMonth(pago.mes || monthStr()) + "-" + String(DIA_PAGO_INSTRUCTORES).padStart(2, "0"));
+  // Por defecto se propone el día 10 del mes en que toca liquidar (mes siguiente al de las
+  // horas), salvo que se esté pagando por adelantado el mes en curso: ahí va la fecha de hoy.
+  const _anticipado = (pago.mes || monthStr()) === monthStr();
+  const [fecha, setFecha] = useState(_anticipado ? todayStr() : nextMonth(pago.mes || monthStr()) + "-" + String(DIA_PAGO_INSTRUCTORES).padStart(2, "0"));
   return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u2705 Confirmar Pago a Instructor"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, pago.nombre), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } }, pago.hPrincipal > 0 && /* @__PURE__ */ React.createElement("div", null, "\u{1F468}\u200D\u{1F3EB} Principal: ", pago.hPrincipal, " hrs \xD7 ", fmt$(pago.tarifaHora), "/hr"), pago.hAsistente > 0 && /* @__PURE__ */ React.createElement("div", null, "\u{1F91D} Asistente: ", pago.hAsistente, " hrs \xD7 ", fmt$(pago.tarifaHoraAsistente), "/hr")), /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 22, fontWeight: 800, marginTop: 8, color: "var(--gr)" } }, fmt$(pago.monto))), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g", onClick: () => onSave(fecha) }, "\u2713 Confirmar Pago"))));
 }
 function ModalEditarFolios({ folios, folioInfoMap, usuarios, onSave, onClose }) {
@@ -1940,6 +1973,7 @@ function ModalReto({ reto, usuarios, cursos, onSave, onClose }) {
 function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, showMoney, comisionOverrides, setComisionOverrides, retos, setRetos }) {
   const [pagando, setPagando] = useState(null);
   const [pagandoInstr, setPagandoInstr] = useState(null);
+  const [editandoInstr, setEditandoInstr] = useState(null);
   const [editandoReto, setEditandoReto] = useState(null);
   async function guardarReto(r) {
     const lista = (retos || []).slice();
@@ -2138,6 +2172,19 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     await stor("set", "pagosGastos", upd);
     setPagandoInstr(null);
   }
+  async function guardarEdicionPagoInstructor(registro, cambios) {
+    const upd = pagosGastos2.map((p) => p.id === registro.id ? { ...p, ...cambios, editadoEn: (/* @__PURE__ */ new Date()).toISOString() } : p);
+    setPagosGastos2(upd);
+    await stor("set", "pagosGastos", upd);
+    setEditandoInstr(null);
+  }
+  async function deshacerPagoInstructor(registro) {
+    if (!confirm("\xBFDeshacer este pago a instructor?\n\nSe borra el registro de gasto y el instructor vuelve a aparecer como pendiente.")) return;
+    const upd = pagosGastos2.filter((p) => p.id !== registro.id);
+    setPagosGastos2(upd);
+    await stor("set", "pagosGastos", upd);
+    setEditandoInstr(null);
+  }
   async function confirmarPago(c, fecha) {
     const pago = {
       id: uid(),
@@ -2239,12 +2286,12 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
       /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } },
         /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
           /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, r.nombre),
-          mostrarBoton ? (pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente")) : /* @__PURE__ */ React.createElement("span", { className: "badge b-ac" }, "\u{1F441}\uFE0F Vista previa")
+          pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : (mostrarBoton ? /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente") : /* @__PURE__ */ React.createElement("span", { className: "badge b-ac" }, "\u{1F441}\uFE0F En curso"))
         ),
         /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } },
           r.hPrincipal > 0 && /* @__PURE__ */ React.createElement("span", null, "\u{1F468}\u200D\u{1F3EB} ", r.hPrincipal, " hrs \u00D7 ", fmt$(r.tarifaHora)),
           r.hAsistente > 0 && /* @__PURE__ */ React.createElement("span", null, "\u{1F91D} ", r.hAsistente, " hrs \u00D7 ", fmt$(r.tarifaHoraAsistente)),
-          mostrarBoton && pagado && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F5D3}\uFE0F Pagado el ", fmtD(pagado.fecha))
+          pagado && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F5D3}\uFE0F Pagado el ", fmtD(pagado.fecha || pagado.date), pagado.notas ? " \xB7 " + pagado.notas : "")
         )
       ),
       /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
@@ -2252,7 +2299,9 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
           /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700 } }, disp(r.monto)),
           /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, mesLabel(r.mes))
         ),
-        mostrarBoton && !pagado && /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: () => setPagandoInstr(r) }, "\u2713 Marcar pagado")
+        pagado
+          ? /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Cambiar fecha, monto o deshacer el pago", onClick: () => setEditandoInstr({ r, registro: pagado }) }, "\u270E Editar")
+          : (r.monto > 0 && /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", title: mostrarBoton ? "Registrar el pago de este mes vencido" : "Pagar por adelantado las horas que lleva en el mes en curso", onClick: () => setPagandoInstr(r) }, mostrarBoton ? "\u2713 Marcar pagado" : "\u{1F4B8} Pagar ahora"))
       )
     );
   }
@@ -2386,7 +2435,8 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     ),
     )
     ),
-    pagandoInstr && /* @__PURE__ */ React.createElement(ModalConfirmarPagoInstructor, { pago: pagandoInstr, onSave: (f) => confirmarPagoInstructor(pagandoInstr, f), onClose: () => setPagandoInstr(null) })
+    pagandoInstr && /* @__PURE__ */ React.createElement(ModalConfirmarPagoInstructor, { pago: pagandoInstr, onSave: (f) => confirmarPagoInstructor(pagandoInstr, f), onClose: () => setPagandoInstr(null) }),
+    editandoInstr && /* @__PURE__ */ React.createElement(ModalEditarPagoInstructor, { pago: editandoInstr.r, registro: editandoInstr.registro, onSave: (c) => guardarEdicionPagoInstructor(editandoInstr.registro, c), onDelete: () => deshacerPagoInstructor(editandoInstr.registro), onClose: () => setEditandoInstr(null) })
   );
 }
 function ModalEditarGasto({ pago, onSave, onClose }) {
@@ -3429,7 +3479,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.08.14-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.08.17-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -3465,7 +3515,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.08.14-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.08.17-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

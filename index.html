@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.08.28-2\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.08.29-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.08.28-2\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.08.29-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -477,6 +477,14 @@ function ocurrenciasGasto(fe, ym) {
   const dia = Math.min(fe.dia || 1, diasEnMes(ym));
   return [`${ym}-${String(dia).padStart(2, "0")}`];
 }
+// Un gasto fijo no puede deber ocurrencias ANTERIORES a su fecha de alta. Sin esto, dar
+// de alta el día 29 un gasto con día de pago 1 creaba al instante un vencido de ese mes
+// (y de todos los meses que el filtro llegara a recorrer), inflando los pendientes.
+function ocurrenciaVigente(fe, fechaISO) {
+  const desde = fe.vigenteDesde || (fe.createdAt ? String(fe.createdAt).slice(0, 10) : null);
+  if (!desde) return true;
+  return fechaISO >= desde;
+}
 function pagoDeOcurrencia(fe, fechaISO, pagosGastos2) {
   if ((fe.frecuencia || "mensual") === "semanal") {
     return pagosGastos2.find((p) => p.gastoId === fe.id && p.ocurrencia === fechaISO);
@@ -865,7 +873,7 @@ function ModalRecordatorios({ pagos, onClose, onMarcarPagado, onEliminar }) {
       /* @__PURE__ */ React.createElement("div", null,
         /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u23F0 Recordatorio de Pagos"),
         /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3, textTransform: "capitalize" } }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" })),
-        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--tx3)", marginTop: 2, fontWeight: 700, letterSpacing: ".4px" } }, "BUILD v2026.08.28-2")
+        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--tx3)", marginTop: 2, fontWeight: 700, letterSpacing: ".4px" } }, "BUILD v2026.08.29-1")
       ),
       /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")
     ),
@@ -1072,7 +1080,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
   const saldoBancario        = saldoIngresosTotales - saldoGastosPagados;
   const pendAmt = gastosRealesMes != null ? gastosRealesMes : gastosFijos.filter((fe) => fe.active).reduce((s, fe) => {
     const skippedPend = new Set(fe.skippedDates || []);
-    const pend = ocurrenciasGasto(fe, monthStr()).filter((fecha) => !skippedPend.has(fecha) && !pagoDeOcurrencia(fe, fecha, pagosGastos2));
+    const pend = ocurrenciasGasto(fe, monthStr()).filter((fecha) => !skippedPend.has(fecha) && ocurrenciaVigente(fe, fecha) && !pagoDeOcurrencia(fe, fecha, pagosGastos2));
     return s + pend.length * fe.monto;
   }, 0);
   const chartData = useMemo(() => {
@@ -1738,6 +1746,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       mesesRevisar.forEach((mesR) => {
         ocurrenciasGasto(fe, mesR).forEach((fecha) => {
           if (skipped.has(fecha)) return;
+          if (!ocurrenciaVigente(fe, fecha)) return;
           if (vistasKey.has(fe.id + "|" + fecha)) return;
           const paid = pagoDeOcurrencia(fe, fecha, pagosGastos2);
           const diff = Math.round((/* @__PURE__ */ new Date(fecha + "T00:00:00") - /* @__PURE__ */ new Date(hoyISO + "T00:00:00")) / 864e5);
@@ -1763,7 +1772,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
     const out = [];
     gastosFijos.forEach((fe) => {
       const skipped = new Set(fe.skippedDates || []);
-      ocurrenciasGasto(fe, mesVerG).forEach((fecha) => {
+      ocurrenciasGasto(fe, mesVerG).filter((fecha) => ocurrenciaVigente(fe, fecha)).forEach((fecha) => {
         if (skipped.has(fecha)) return;
         const paid = pagoDeOcurrencia(fe, fecha, pagosGastos2);
         out.push({ ...fe, _fecha: fecha, paid, isOverdue: false, isDueSoon: false });
@@ -1887,7 +1896,41 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
   // Renta de la terminal Getnet: $200 mensuales por equipo (carátula del contrato).
   // Se ofrece dar de alta una sola vez; si ya existe o el usuario lo rechaza, no
   // vuelve a insistir (queda la marca en localStorage).
-  const yaTieneRentaGetnet = (gastosFijos || []).some((g) => g && (g.getnetTerminal === true || /getnet/i.test(String(g.desc || ""))));
+  const gastosGetnet = (gastosFijos || []).filter((g) => g && (g.getnetTerminal === true || /getnet/i.test(String(g.desc || ""))));
+  const yaTieneRentaGetnet = gastosGetnet.length > 0;
+  // Gastos dados de alta sin fecha de vigencia: son los que pueden estar generando
+  // vencidos de meses en los que todavía no existían.
+  const sinVigencia = (gastosFijos || []).filter((g) => g && g.active && !g.vigenteDesde);
+  // Cuántas ocurrencias vencidas desaparecerían al fijarles la fecha de alta.
+  // Referencia de alta: la que tenga, y si no tiene ninguna, hoy (el gasto se acaba de
+  // crear, así que no puede deber meses anteriores).
+  const _altaDe = (g) => g.vigenteDesde || (g.createdAt ? String(g.createdAt).slice(0, 10) : todayStr());
+  const fantasmas = (() => {
+    let n = 0;
+    sinVigencia.forEach((g) => {
+      const desde = _altaDe(g);
+      conEstado.forEach((e) => { if (e.id === g.id && !e.paid && e._fecha < desde) n++; });
+    });
+    return n;
+  })();
+  async function repararVigencias() {
+    const det = sinVigencia.map((g) => "\u2022 " + (g.desc || "") + " \u2014 desde " + _altaDe(g)).join("\n");
+    if (!confirm("Se marcar\xE1 la fecha de alta de " + sinVigencia.length + " gasto(s) fijo(s):\n\n" + det
+      + "\n\nDejar\xE1n de aparecer como vencidos los meses en los que a\xFAn no exist\xEDan (" + fantasmas + " pendiente(s) fantasma).\n\nNing\xFAn pago registrado se modifica.")) return;
+    const upd = (gastosFijos || []).map((g) => (g && g.active && !g.vigenteDesde)
+      ? { ...g, vigenteDesde: _altaDe(g) } : g);
+    setGastosFijos(upd);
+    await stor("set", "gastosFijos", upd);
+  }
+  // Un solo gasto por terminal: si el bot\xF3n se puls\xF3 dos veces, se quita el sobrante.
+  async function quitarDuplicadosGetnet() {
+    if (gastosGetnet.length < 2) return;
+    if (!confirm("Hay " + gastosGetnet.length + " gastos de terminal Getnet. \xBFDejar solo el primero y eliminar los otros " + (gastosGetnet.length - 1) + "?")) return;
+    const conservar = gastosGetnet[0].id;
+    const upd = (gastosFijos || []).filter((g) => !(g && (g.getnetTerminal === true || /getnet/i.test(String(g.desc || ""))) && g.id !== conservar));
+    setGastosFijos(upd);
+    await stor("set", "gastosFijos", upd);
+  }
   async function altaRentaGetnet() {
     const nuevo = {
       id: uid(),
@@ -1899,6 +1942,8 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       dia: 1,
       active: true,
       getnetTerminal: true,
+      // El cobro empieza hoy: no se le exigen meses ni días anteriores al alta.
+      vigenteDesde: todayStr(),
       notas: "$200 por terminal \u2014 carátula del contrato de afiliación",
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
@@ -1916,7 +1961,8 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       upd = gastosFijos.map((fe) => fe.id === g.id ? g : fe);
       setEditando(null);
     } else {
-      upd = [...gastosFijos, g];
+      // Todo gasto nuevo arranca hoy: evita que aparezca vencido el día que se da de alta.
+      upd = [...gastosFijos, { ...g, vigenteDesde: g.vigenteDesde || todayStr(), createdAt: g.createdAt || (/* @__PURE__ */ new Date()).toISOString() }];
       setShowForm(false);
     }
     setGastosFijos(upd);
@@ -2031,6 +2077,12 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
         "\u{1F4B8} Gastos de " + mesLabelGlobal(cm) + " \u2014 pagados " + fmt$(totMes) + " + pendientes " + fmt$(totPend) + " = " + fmt$(totMes + totPend)),
       React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginBottom: 10 } },
         "Todo lo que sali\xF3 este mes, sea gasto fijo, extraordinario, n\xF3mina de instructores o comisiones."),
+      fantasmas > 0 && React.createElement("div", { style: { background: "var(--am2)", border: "1px solid var(--am)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12 } },
+        React.createElement("span", null, "\u26A0\uFE0F Hay ", React.createElement("strong", null, fantasmas), " pendiente(s) de meses en los que el gasto todav\xEDa no exist\xEDa. Se corrige marcando su fecha de alta."),
+        React.createElement("button", { className: "btn btn-p btn-sm", style: { marginLeft: "auto" }, onClick: repararVigencias }, "\u{1F527} Corregir")),
+      gastosGetnet.length > 1 && React.createElement("div", { style: { background: "var(--am2)", border: "1px solid var(--am)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12 } },
+        React.createElement("span", null, "\u26A0\uFE0F Hay ", React.createElement("strong", null, gastosGetnet.length), " gastos de renta de terminal Getnet duplicados."),
+        React.createElement("button", { className: "btn btn-p btn-sm", style: { marginLeft: "auto" }, onClick: quitarDuplicadosGetnet }, "\u{1F5D1} Dejar solo uno")),
       !yaTieneRentaGetnet && React.createElement("div", { style: { background: "var(--s2)", border: "1px dashed var(--ac)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12 } },
         React.createElement("span", null, "\u{1F7E2} La renta de la terminal Getnet ($200 mensuales por equipo) todav\xEDa no est\xE1 dada de alta como gasto fijo."),
         React.createElement("button", { className: "btn btn-p btn-sm", style: { marginLeft: "auto" }, onClick: altaRentaGetnet }, "\u2795 Darla de alta")),
@@ -3065,7 +3117,7 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
   }, 0);
   const gastosFijosMes = (ym) => gastosFijos.filter((g) => g.active).reduce((s, g) => {
     const skipped = new Set(g.skippedDates || []);
-    const ocs = ocurrenciasGasto(g, ym).filter((fecha) => !skipped.has(fecha));
+    const ocs = ocurrenciasGasto(g, ym).filter((fecha) => !skipped.has(fecha) && ocurrenciaVigente(g, fecha));
     return s + ocs.length * g.monto;
   }, 0);
   const timeline = useMemo(() => meses.map((ym) => ({
@@ -3106,7 +3158,7 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
     if (det === "activos") return React.createElement(FichaDetalle, { titulo: "\u{1F465} Alumnos activos hoy", cols: ["Folio", "Alumno", "Curso"], rows: alumnosActivosEnMes(cm, mats, cursos).map((m2) => ["#" + m2.folio, m2.alumno || "", m2.curso || ""]), total: null, onClose: () => setDet(null) });
     if (det === "proy") return React.createElement(FichaDetalle, { titulo: "\u{1F4B0} Ingreso m\xEDnimo proyectado del mes", cols: ["Folio", "Alumno", "Curso", "Costo base"], rows: alumnosActivosEnMes(cm, mats, cursos).map((m2) => { const cu = cursos.find((c) => c.nombre === m2.curso); const cb = cu ? parseFloat(String(cu.costoBase || "").replace(/[^0-9.]/g, "")) || 0 : 0; return ["#" + m2.folio, m2.alumno || "", m2.curso || "", F(cb)]; }), total: F(ingresoProyectado(cm)), onClose: () => setDet(null) });
     if (det === "real") return React.createElement(FichaDetalle, { titulo: "\u2705 Ya cobrado este mes (neto)", cols: ["Fecha", "Concepto", "Neto"], rows: ingresos.filter((i) => i.date && i.date.startsWith(cm)).map((i) => [String(i.date), i.desc || "", F(i.neto || 0)]), total: F(ingresoReal(cm)), onClose: () => setDet(null) });
-    if (det === "gfijos") return React.createElement(FichaDetalle, { titulo: "\u{1F4B8} Gastos fijos del mes", cols: ["Gasto", "Ocurrencias", "Total"], rows: gastosFijos.filter((g) => g.active).map((g) => { const skipped = new Set(g.skippedDates || []); const ocs = ocurrenciasGasto(g, cm).filter((f2) => !skipped.has(f2)); return [g.desc || "", F(g.monto || 0) + " \xD7 " + ocs.length, F((g.monto || 0) * ocs.length)]; }).filter((r) => r[2] !== F(0)), total: F(totalGastos), onClose: () => setDet(null) });
+    if (det === "gfijos") return React.createElement(FichaDetalle, { titulo: "\u{1F4B8} Gastos fijos del mes", cols: ["Gasto", "Ocurrencias", "Total"], rows: gastosFijos.filter((g) => g.active).map((g) => { const skipped = new Set(g.skippedDates || []); const ocs = ocurrenciasGasto(g, cm).filter((f2) => !skipped.has(f2) && ocurrenciaVigente(g, f2)); return [g.desc || "", F(g.monto || 0) + " \xD7 " + ocs.length, F((g.monto || 0) * ocs.length)]; }).filter((r) => r[2] !== F(0)), total: F(totalGastos), onClose: () => setDet(null) });
     return null; })(), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4C8} Pron\xF3stico de Ingresos"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 2 } }, "Proyecci\xF3n basada en alumnos regulares del CRM \xB7 ", mats.length, " matr\xEDculas \xB7 ", cursos.length, " cursos"))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 18 } }, [
     { l: "Alumnos activos hoy", v: alumnosActivosEnMes(cm, mats, cursos).length, c: "var(--ac)", k: "activos" },
     { l: "Ingreso m\xEDn. este mes", v: fmt$(ingresoProyectado(cm)), c: "var(--gr)", mono: true, k: "proy" },
@@ -3390,6 +3442,7 @@ function App() {
       mesesRevisar.forEach((ym) => {
         ocurrenciasGasto(fe, ym).forEach((fecha) => {
           if (skippedUp.has(fecha)) return;
+          if (!ocurrenciaVigente(fe, fecha)) return;
           if (pagoDeOcurrencia(fe, fecha, pagosGastos2)) return;
           const diff = Math.round((/* @__PURE__ */ new Date(fecha + "T00:00:00") - /* @__PURE__ */ new Date(hoyISO + "T00:00:00")) / 864e5);
           if (diff <= 7) out.push({ ...fe, _fecha: fecha, daysUntilDue: diff, isOverdue: diff < 0, isDueSoon: diff >= 0 && diff <= 7 });
@@ -3436,7 +3489,7 @@ function App() {
     // 1. Gastos fijos del mes (misma fórmula que Pronóstico y GastosFijos)
     const baseFijo = gastosFijos.filter((g) => g.active).reduce((s, g) => {
       const sk = new Set(g.skippedDates || []);
-      return s + ocurrenciasGasto(g, cmNow).filter((f) => !sk.has(f)).length * g.monto;
+      return s + ocurrenciasGasto(g, cmNow).filter((f) => !sk.has(f) && ocurrenciaVigente(g, f)).length * g.monto;
     }, 0);
     // 2. Vencidos de meses anteriores no pagados
     let vencidos = 0;
@@ -3447,7 +3500,7 @@ function App() {
       for (let _i = 0; _i < 24; _i++) {
         ym2 = prevMonth(ym2);
         if (ym2 < startM) break;
-        ocurrenciasGasto(g, ym2).forEach((fecha) => {
+        ocurrenciasGasto(g, ym2).filter((fecha) => ocurrenciaVigente(g, fecha)).forEach((fecha) => {
           if (sk.has(fecha)) return;
           const diff = Math.round((new Date(fecha + "T00:00:00") - new Date(hoyISO + "T00:00:00")) / 864e5);
           if (diff >= 0) return; // no vencido
@@ -3740,7 +3793,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.08.28-2"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.08.29-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -3776,7 +3829,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.08.28-2\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.08.29-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

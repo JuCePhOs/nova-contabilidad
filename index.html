@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.09.02-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.09.03-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.09.02-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.09.03-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -189,7 +189,7 @@ const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.09.02-1";
+const BUILD_VERSION = "BUILD v2026.09.03-1";
 const hoyRealStr = () => (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -606,15 +606,36 @@ function calcProgresoReto(reto, crmData) {
   const elegibles = mats.filter((m) => _retoAplica(reto, crmData, m.createdBy || "sin_asignar", m.folio));
   const n = elegibles.length;
   const meta = parseInt(reto.meta, 10) || 0;
+  const logrado = n >= meta;
+  // Un reto con fecha de fin deja de estar "en curso" cuando esa fecha pasa: a partir de
+  // ahí queda cerrado y el resultado es definitivo (cumplido o no cumplido).
+  const hoy = hoyRealStr();
+  const cerrado = !!(reto.hasta && hoy > String(reto.hasta));
+  const porIniciar = !!(reto.desde && hoy < String(reto.desde));
+  const diasRestantes = reto.hasta
+    ? Math.round((new Date(String(reto.hasta) + "T00:00:00") - new Date(hoy + "T00:00:00")) / 864e5)
+    : null;
   return {
-    n, meta,
-    logrado: n >= meta,
+    n, meta, logrado, cerrado, porIniciar, diasRestantes,
+    // Estado único que consumen la etiqueta, el color y los botones.
+    estado: reto.activo === false ? "pausado"
+      : porIniciar ? "por_iniciar"
+      : cerrado ? (logrado ? "cumplido" : "no_cumplido")
+      : logrado ? "logrado" : "en_curso",
     pct: meta > 0 ? Math.min(100, Math.round(n / meta * 100)) : 0,
     faltan: Math.max(0, meta - n),
     folios: elegibles.map((m) => m.folio),
-    extra: +(n >= meta ? n * ((parseFloat(reto.montoReto) || 0) - COMISION_POR_CONTRATO) : 0).toFixed(2)
+    extra: +(logrado ? n * ((parseFloat(reto.montoReto) || 0) - COMISION_POR_CONTRATO) : 0).toFixed(2)
   };
 }
+const RETO_ESTADOS = {
+  pausado:     { txt: "\u23F8 Pausado",      badge: "b-gy", color: "var(--tx3)" },
+  por_iniciar: { txt: "\u{1F553} Por iniciar", badge: "b-ac", color: "var(--ac)" },
+  en_curso:    { txt: "En curso",            badge: "b-am", color: "var(--am)" },
+  logrado:     { txt: "\u{1F3C6} Logrado",     badge: "b-gr", color: "var(--gr)" },
+  cumplido:    { txt: "\u2705 Cumplido",      badge: "b-gr", color: "var(--gr)" },
+  no_cumplido: { txt: "\u274C No cumplido",   badge: "b-rd", color: "var(--rd)" }
+};
 function aplicarOverridesComisiones(rawGroups, overrides, usuarios, pagosGastos, crmData, retos) {
   const ov = overrides || {};
   const nombreDe = (u) => {
@@ -2293,6 +2314,33 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     setRetos(lista);
     await stor("set", "retos", lista);
   }
+  // Un reto cerrado se puede reabrir moviendo su fecha de fin. Se guarda el historial de
+  // extensiones para que quede claro que el plazo original ya había vencido.
+  async function extenderReto(id) {
+    const rt = (retos || []).find((x) => x.id === id);
+    if (!rt) return;
+    const prog = calcProgresoReto(rt, crmData);
+    const sug = (() => {
+      const base = new Date(String(rt.hasta || hoyRealStr()) + "T00:00:00");
+      base.setMonth(base.getMonth() + 1);
+      return base.toISOString().slice(0, 10);
+    })();
+    const nueva = prompt(
+      "Extender \u201C" + rt.nombre + "\u201D\n\n"
+      + "Plazo actual: " + rt.desde + " \u2192 " + rt.hasta + "\n"
+      + "Avance: " + prog.n + " / " + prog.meta + " contratos"
+      + (prog.logrado ? " (meta ya alcanzada)" : " (faltan " + prog.faltan + ")") + "\n\n"
+      + "Nueva fecha de fin (AAAA-MM-DD):", sug);
+    if (nueva === null) return;
+    const v = String(nueva).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) { alert("Formato inv\xE1lido. Usa AAAA-MM-DD."); return; }
+    if (v <= String(rt.hasta || "")) { alert("La nueva fecha debe ser posterior al cierre actual (" + rt.hasta + ")."); return; }
+    const lista = (retos || []).map((x) => x.id === id
+      ? { ...x, hasta: v, activo: true, extensiones: [...(x.extensiones || []), { de: x.hasta, a: v, fecha: hoyRealStr() }] }
+      : x);
+    setRetos(lista);
+    await stor("set", "retos", lista);
+  }
   const [filtro, setFiltro] = useState("todas");
   const [mesPagoF, setMesPagoF] = useState(null); // filtro por mes de pago (clic en fichas mes caído / en curso)
   const disp = showMoney || fmt$;
@@ -2632,19 +2680,26 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
           (retos || []).map((rt) => {
             const prog = calcProgresoReto(rt, crmData);
             const inactivo = rt.activo === false;
-            const col = inactivo ? "var(--tx3)" : prog.logrado ? "var(--gr)" : "var(--am)";
+            const est = RETO_ESTADOS[prog.estado] || RETO_ESTADOS.en_curso;
+            const col = est.color;
             const uName = (((crmData && crmData.usuarios) || []).find((u) => u.username === rt.usuario) || {}).name || rt.usuario;
             return React.createElement("div", { key: rt.id, style: { border: "1px solid " + (inactivo ? "var(--br)" : col), borderRadius: 12, padding: "14px", background: "var(--s2)", opacity: inactivo ? 0.55 : 1 } },
               React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 } },
                 React.createElement("strong", { style: { fontSize: 14 } }, rt.nombre),
-                prog.logrado && !inactivo ? React.createElement("span", { className: "badge b-gr" }, "\u{1F3C6} Logrado") : React.createElement("span", { className: "badge b-am" }, inactivo ? "Pausado" : "En curso")
+                React.createElement("span", { className: "badge " + est.badge }, est.txt),
+                prog.cerrado && !inactivo && React.createElement("span", { style: { fontSize: 10, color: "var(--tx3)" } }, "cerrado el ", rt.hasta),
+                !prog.cerrado && !inactivo && !prog.porIniciar && prog.diasRestantes !== null && React.createElement("span", { style: { fontSize: 10, color: prog.diasRestantes <= 3 ? "var(--am)" : "var(--tx3)" } },
+                  prog.diasRestantes === 0 ? "\xFAltimo d\xEDa" : "quedan " + prog.diasRestantes + " d\xEDa(s)")
               ),
               React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginBottom: 8 } }, uName, " \xB7 ", rt.desde, " \u2192 ", rt.hasta, " \xB7 ", fmt$(COMISION_POR_CONTRATO), " \u2192 ", React.createElement("strong", { style: { color: col } }, fmt$(rt.montoReto))),
               React.createElement("div", { style: { background: "var(--s1)", borderRadius: 20, height: 10, overflow: "hidden", marginBottom: 6 } },
                 React.createElement("div", { style: { width: prog.pct + "%", height: "100%", background: col, transition: "width .3s" } })),
               React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginBottom: 8 } },
                 React.createElement("strong", { style: { color: col, fontSize: 15 } }, prog.n), " / ", prog.meta, " contratos",
-                prog.logrado ? React.createElement("span", { style: { color: "var(--gr)", marginLeft: 6 } }, "\u2713 +", fmt$(prog.extra), " extra") : React.createElement("span", { style: { color: "var(--tx3)", marginLeft: 6 } }, "faltan ", prog.faltan)),
+                prog.logrado ? React.createElement("span", { style: { color: "var(--gr)", marginLeft: 6 } }, "\u2713 +", fmt$(prog.extra), " extra")
+                  : prog.cerrado ? React.createElement("span", { style: { color: "var(--rd)", marginLeft: 6 } }, "cerr\xF3 sin alcanzar la meta (falt", prog.faltan === 1 ? "\xF3 1" : "aron " + prog.faltan, ")")
+                  : React.createElement("span", { style: { color: "var(--tx3)", marginLeft: 6 } }, "faltan ", prog.faltan)),
+              (rt.extensiones || []).length > 0 && React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginBottom: 6 } }, "\u{1F4C5} Extendido ", rt.extensiones.length, " vez(ces) \xB7 fin original ", rt.extensiones[0].de),
               (rt.cursosExcluidos || []).length > 0 && React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginBottom: 8 } }, "No cuentan: ", rt.cursosExcluidos.join(", ")),
               prog.n > 0 && React.createElement("details", { style: { marginBottom: 8 } },
                 React.createElement("summary", { style: { cursor: "pointer", fontSize: 11, color: "var(--tx2)" } }, "Ver folios que cuentan (", prog.n, ")"),
@@ -2660,7 +2715,8 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
               ),
               React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
                 React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10 }, onClick: () => setEditandoReto(rt) }, "\u270E Editar"),
-                React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10 }, onClick: () => toggleReto(rt.id) }, inactivo ? "\u25B6 Activar" : "\u23F8 Pausar"),
+                prog.cerrado && React.createElement("button", { className: "btn btn-p btn-sm", style: { fontSize: 10 }, title: "Mover la fecha de fin y reabrir el reto", onClick: () => extenderReto(rt.id) }, "\u{1F4C5} Extender"),
+                !prog.cerrado && React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10 }, onClick: () => toggleReto(rt.id) }, inactivo ? "\u25B6 Activar" : "\u23F8 Pausar"),
                 React.createElement("button", { className: "btn btn-d btn-sm", style: { fontSize: 10 }, onClick: () => eliminarReto(rt.id) }, "\u{1F5D1}\uFE0F")
               )
             );
@@ -3799,7 +3855,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.09.02-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.09.03-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -3835,7 +3891,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.09.02-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.09.03-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

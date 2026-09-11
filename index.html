@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.09.09-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.09.11-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.09.09-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.09.11-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -189,7 +189,7 @@ const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.09.09-1";
+const BUILD_VERSION = "BUILD v2026.09.11-1";
 const hoyRealStr = () => (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -464,6 +464,38 @@ function migrarPagosInstructores(lista) {
     return { ...p, instrMesHoras: p.mes, mes: mesPago || p.mes };
   });
   return cambio ? out : lista;
+}
+// ── PAGOS PARCIALES A INSTRUCTORES ───────────────────────────────────────────
+// Un mismo instructor puede recibir varios abonos por las horas de un mismo mes.
+// Todos los registros comparten instructorId + instrMesHoras; el adeudo vivo es lo
+// calculado por horas menos la suma de esos abonos. Antes bastaba UN registro para
+// dar el mes por liquidado, así que un abono de $500 sobre $3,000 borraba el
+// pendiente completo.
+const CENT_INSTR = 5e-3;
+function pagosInstrDe(pagos, instructorId, mesHoras) {
+  return (pagos || []).filter((p) => p && p.cat === "Pago Instructores" && p.instructorId === instructorId && mesHorasInstr(p) === mesHoras);
+}
+// r viene de calcPagosInstructores: { id, monto, mes, ... }
+function saldoInstr(pagos, r, mes) {
+  const m = mes || (r && r.mes);
+  const regs = pagosInstrDe(pagos, r && r.id, m).slice().sort((a, b) => String(a.fecha || a.date || "").localeCompare(String(b.fecha || b.date || "")));
+  const total = +(parseFloat(r && r.monto) || 0).toFixed(2);
+  const pagado = +regs.reduce((s, p) => s + (parseFloat(p.monto) || 0), 0).toFixed(2);
+  const dif = +(total - pagado).toFixed(2);
+  const resta = dif > CENT_INSTR ? dif : 0;
+  return {
+    regs,
+    total,
+    pagado,
+    resta,
+    saldoFavor: dif < -CENT_INSTR ? +(-dif).toFixed(2) : 0,
+    liquidado: regs.length > 0 && resta === 0,
+    parcial: regs.length > 0 && resta > 0
+  };
+}
+// Lo que todavía falta por liquidarle a un instructor por las horas de `mes`.
+function restaInstr(pagos, r, mes) {
+  return saldoInstr(pagos, r, mes).resta;
 }
 function nextMonth(ym) {
   const [y, m] = ym.split("-").map(Number);
@@ -1211,9 +1243,9 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
     // la alerta no aparecía el día de pago.
     const cmI = monthStr();
     const mesVencidoI = prevMonth(cmI);
-    const pagadoI = (r, mes) => pagosGastos2.some((p) => p.cat === "Pago Instructores" && p.instructorId === r.id && mesHorasInstr(p) === mes);
-    const pendI = calcPagosInstructores(crmData, mesVencidoI).filter((r) => r.monto > 0 && !pagadoI(r, mesVencidoI));
-    const totalI = pendI.reduce((s, r) => s + r.monto, 0);
+    // Con pagos parciales, lo pendiente es el SALDO (calculado por horas − abonos).
+    const pendI = calcPagosInstructores(crmData, mesVencidoI).filter((r) => r.monto > 0 && restaInstr(pagosGastos2, r, mesVencidoI) > 0);
+    const totalI = pendI.reduce((s, r) => s + restaInstr(pagosGastos2, r, mesVencidoI), 0);
     if (totalI <= 0) return null;
     const diaHoyI = parseInt(String(todayStr()).slice(8, 10), 10) || 1;
     const vencidoI = diaHoyI >= DIA_PAGO_INSTRUCTORES;
@@ -2324,8 +2356,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
   // Nómina de instructores del mes vencido todavía sin liquidar.
   const _mesVencInstr = prevMonth(cm);
   const totInstrPend = (crmData ? calcPagosInstructores(crmData, _mesVencInstr) : [])
-    .filter((r) => r.monto > 0 && !(pagosGastos2 || []).some((p) => p.cat === "Pago Instructores" && p.instructorId === r.id && mesHorasInstr(p) === _mesVencInstr))
-    .reduce((s, r) => s + r.monto, 0);
+    .reduce((s, r) => s + restaInstr(pagosGastos2 || [], r, _mesVencInstr), 0);
   const totPend = totFijoPend + totVencidoAnterior + totComisionesPend + totInstrPend;
   // Lo que costará el mes completo: lo que ya salió más lo que falta por salir.
   const totMesCompleto = totPagado + totPend;
@@ -2494,8 +2525,9 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
     conEstado.filter((e) => e._mesAnterior && !e.paid).forEach((e) => pendientes.push({ k: "v_" + e.id + "_" + e._fecha, desc: e.desc, cat: e.cat, fecha: e._fecha, monto: e.monto, tipo: "vencido" }));
     comisionesItems.filter((c) => !c._pagado).forEach((c) => pendientes.push({ k: "c_" + c.usuario + "_" + c.mesGanado, desc: "Comisi\xF3n " + (c.nombreUsuario || c.usuario) + " \u2014 " + c.count + " contrato" + (c.count !== 1 ? "s" : ""), cat: "Comisiones", fecha: c.mesPago ? c.mesPago + "-15" : "", monto: c.monto, tipo: "comision" }));
     (crmData ? calcPagosInstructores(crmData, _mesVencInstr) : [])
-      .filter((r) => r.monto > 0 && !(pagosGastos2 || []).some((p) => p.cat === "Pago Instructores" && p.instructorId === r.id && mesHorasInstr(p) === _mesVencInstr))
-      .forEach((r) => pendientes.push({ k: "i_" + r.id, desc: r.nombre + " \u2014 " + r.horas + "h de " + mesLabelGlobal(_mesVencInstr), cat: "Pago Instructores", fecha: cm + "-" + String(DIA_PAGO_INSTRUCTORES).padStart(2, "0"), monto: r.monto, tipo: "instructor" }));
+      .map((r) => ({ r, s: saldoInstr(pagosGastos2 || [], r, _mesVencInstr) }))
+      .filter(({ s }) => s.resta > 0)
+      .forEach(({ r, s }) => pendientes.push({ k: "i_" + r.id, desc: r.nombre + " \u2014 " + r.horas + "h de " + mesLabelGlobal(_mesVencInstr) + (s.parcial ? " \xB7 abonado " + fmt$(s.pagado) + " de " + fmt$(s.total) : ""), cat: "Pago Instructores", fecha: cm + "-" + String(DIA_PAGO_INSTRUCTORES).padStart(2, "0"), monto: s.resta, tipo: "instructor" }));
     pendientes.sort((a, b) => String(a.fecha || "").localeCompare(String(b.fecha || "")));
     if (!gastosMes.length && !pendientes.length) return null;
     const totMes = gastosMes.reduce((s2, p) => s2 + (p.monto || 0), 0);
@@ -2566,7 +2598,7 @@ function ModalConfirmarComision({ comision, onSave, onClose }) {
 // Edición de un pago a instructor ya registrado: fecha, monto y notas, más la opción de
 // deshacerlo. Hacía falta porque un instructor pidió su pago en el mismo mes en que generó
 // las horas, y el registro quedaba fijo en el día 10 del mes siguiente sin forma de tocarlo.
-function ModalEditarPagoInstructor({ pago, registro, onSave, onDelete, onClose }) {
+function ModalEditarPagoInstructor({ pago, registro, saldo, onSave, onDelete, onClose }) {
   const [fecha, setFecha] = useState(registro.fecha || registro.date || todayStr());
   const [monto, setMonto] = useState(String(registro.monto != null ? registro.monto : ""));
   const [notas, setNotas] = useState(registro.notas || "");
@@ -2582,7 +2614,17 @@ function ModalEditarPagoInstructor({ pago, registro, onSave, onDelete, onClose }
     /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 16 } },
       /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, (pago && pago.nombre) || registro.desc),
       /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } }, "Horas de ", mesLabelGlobal(registro.mes || (pago && pago.mes) || monthStr())),
-      calculado != null && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Calculado por horas: ", fmt$(calculado))),
+      calculado != null && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Calculado por horas: ", fmt$(calculado)),
+      saldo && saldo.regs && saldo.regs.length > 1 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 2 } }, saldo.regs.length, " abonos registrados \xB7 total abonado ", fmt$(saldo.pagado))),
+    // Al cambiar el monto de este abono se recalcula en vivo lo que quedaría por liquidar.
+    saldo && calculado != null && (() => {
+      const otros = +(saldo.pagado - (parseFloat(registro.monto) || 0)).toFixed(2);
+      const resta = +(calculado - otros - (parseFloat(monto) || 0)).toFixed(2);
+      const falta = resta > 5e-3 ? resta : 0;
+      return /* @__PURE__ */ React.createElement("div", { style: { background: falta > 0 ? "rgba(245,193,71,.10)" : "rgba(16,201,138,.10)", border: "1px solid " + (falta > 0 ? "rgba(245,193,71,.4)" : "rgba(16,201,138,.4)"), borderRadius: 8, padding: "9px 12px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
+        /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: "var(--tx2)" } }, falta > 0 ? "Quedar\xEDa por liquidar" : "\u2713 Quedar\xEDa liquidado"),
+        /* @__PURE__ */ React.createElement("span", { className: "mono", style: { fontSize: 17, fontWeight: 800, color: falta > 0 ? "var(--am)" : "var(--gr)" } }, fmt$(falta)));
+    })(),
     /* @__PURE__ */ React.createElement("div", { className: "fgrid" },
       /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) })),
       /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Monto pagado"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "number", step: "0.01", min: "0", value: monto, onChange: (e) => setMonto(e.target.value) })),
@@ -2594,12 +2636,52 @@ function ModalEditarPagoInstructor({ pago, registro, onSave, onDelete, onClose }
         /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"),
         /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: guardar }, "Guardar")))));
 }
-function ModalConfirmarPagoInstructor({ pago, onSave, onClose }) {
+function ModalConfirmarPagoInstructor({ pago, saldo, modoInicial, onSave, onClose }) {
   // Por defecto se propone el día 10 del mes en que toca liquidar (mes siguiente al de las
   // horas), salvo que se esté pagando por adelantado el mes en curso: ahí va la fecha de hoy.
   const _anticipado = (pago.mes || monthStr()) === monthStr();
+  const s = saldo || { total: pago.monto, pagado: 0, resta: pago.monto, regs: [], parcial: false };
   const [fecha, setFecha] = useState(_anticipado ? todayStr() : nextMonth(pago.mes || monthStr()) + "-" + String(DIA_PAGO_INSTRUCTORES).padStart(2, "0"));
-  return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u2705 Confirmar Pago a Instructor"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, pago.nombre), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } }, pago.hPrincipal > 0 && /* @__PURE__ */ React.createElement("div", null, "\u{1F468}\u200D\u{1F3EB} Principal: ", pago.hPrincipal, " hrs \xD7 ", fmt$(pago.tarifaHora), "/hr"), pago.hAsistente > 0 && /* @__PURE__ */ React.createElement("div", null, "\u{1F91D} Asistente: ", pago.hAsistente, " hrs \xD7 ", fmt$(pago.tarifaHoraAsistente), "/hr")), /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 22, fontWeight: 800, marginTop: 8, color: "var(--gr)" } }, fmt$(pago.monto))), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g", onClick: () => onSave(fecha) }, "\u2713 Confirmar Pago"))));
+  const [parcial, setParcial] = useState(modoInicial === "parcial");
+  const [monto, setMonto] = useState(String(s.resta));
+  const [notas, setNotas] = useState("");
+  const aPagar = parcial ? (parseFloat(monto) || 0) : s.resta;
+  const restanteTras = +(s.resta - aPagar).toFixed(2);
+  const invalido = !(aPagar > 0) || aPagar - s.resta > 5e-3;
+  return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 460 } },
+    /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, parcial ? "\u25D0 Registrar Pago Parcial" : "\u2705 Confirmar Pago a Instructor"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")),
+    /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 14 } },
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, pago.nombre),
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } },
+        pago.hPrincipal > 0 && /* @__PURE__ */ React.createElement("div", null, "\u{1F468}\u200D\u{1F3EB} Principal: ", pago.hPrincipal, " hrs \xD7 ", fmt$(pago.tarifaHora), "/hr"),
+        pago.hAsistente > 0 && /* @__PURE__ */ React.createElement("div", null, "\u{1F91D} Asistente: ", pago.hAsistente, " hrs \xD7 ", fmt$(pago.tarifaHoraAsistente), "/hr")),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10, fontSize: 12, color: "var(--tx2)" } },
+        /* @__PURE__ */ React.createElement("span", null, "Total por horas"), /* @__PURE__ */ React.createElement("span", { className: "mono" }, fmt$(s.total))),
+      s.pagado > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 4, fontSize: 12, color: "var(--gr)" } },
+        /* @__PURE__ */ React.createElement("span", null, "Ya abonado (", s.regs.length, " pago", s.regs.length !== 1 ? "s" : "", ")"), /* @__PURE__ */ React.createElement("span", { className: "mono" }, "\u2212", fmt$(s.pagado))),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--br)" } },
+        /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: "var(--tx2)" } }, "Saldo pendiente"),
+        /* @__PURE__ */ React.createElement("span", { className: "mono", style: { fontSize: 22, fontWeight: 800, color: "var(--gr)" } }, fmt$(s.resta)))),
+    /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", background: parcial ? "rgba(245,193,71,.10)" : "transparent", border: "1px solid " + (parcial ? "var(--am)" : "var(--br)"), borderRadius: 8, padding: "9px 11px", marginBottom: 12 } },
+      /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: parcial, onChange: (e) => { setParcial(e.target.checked); setMonto(String(s.resta)); } }),
+      /* @__PURE__ */ React.createElement("strong", null, "\u25D0 Pago parcial"),
+      /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)", fontWeight: 400, fontSize: 11 } }, "(abono a cuenta \u2014 el resto sigue pendiente)")),
+    /* @__PURE__ */ React.createElement("div", { className: "fgrid" },
+      /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) })),
+      /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, parcial ? "Monto que se paga ahora" : "Monto a pagar"),
+        /* @__PURE__ */ React.createElement("input", { className: "finp", type: "number", step: "0.01", min: "0", max: String(s.resta), value: parcial ? monto : String(s.resta), disabled: !parcial, onChange: (e) => setMonto(e.target.value) })),
+      parcial && /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Notas"), /* @__PURE__ */ React.createElement("textarea", { className: "finp", rows: 2, value: notas, onChange: (e) => setNotas(e.target.value), placeholder: "Adelanto, acuerdo de pago, etc." }))),
+    parcial && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, background: restanteTras > 5e-3 ? "rgba(245,193,71,.10)" : "rgba(16,201,138,.10)", border: "1px solid " + (restanteTras > 5e-3 ? "rgba(245,193,71,.4)" : "rgba(16,201,138,.4)"), borderRadius: 8, padding: "10px 12px" } },
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--tx2)" } },
+        /* @__PURE__ */ React.createElement("span", null, "Se paga ahora"), /* @__PURE__ */ React.createElement("span", { className: "mono", style: { color: "var(--gr)" } }, fmt$(aPagar > 0 ? aPagar : 0))),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, marginTop: 6 } },
+        /* @__PURE__ */ React.createElement("span", null, restanteTras > 5e-3 ? "Falta por liquidar" : "\u2713 Queda liquidado"),
+        /* @__PURE__ */ React.createElement("span", { className: "mono", style: { color: restanteTras > 5e-3 ? "var(--am)" : "var(--gr)", fontSize: 17 } }, fmt$(restanteTras > 5e-3 ? restanteTras : 0)))),
+    invalido && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--rd)", marginTop: 10 } }, aPagar > 0 ? "El abono no puede ser mayor al saldo pendiente (" + fmt$(s.resta) + ")." : "Captura un monto mayor a 0."),
+    /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 10 } }, "El dinero se cuenta en el mes de la fecha de pago; las horas siguen perteneciendo a ", mesLabelGlobal(pago.mes || monthStr()), "."),
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } },
+      /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"),
+      /* @__PURE__ */ React.createElement("button", { className: "btn btn-g", disabled: invalido, onClick: () => onSave({ fecha, monto: aPagar, notas }) }, parcial ? "\u25D0 Registrar abono" : "\u2713 Confirmar Pago"))));
 }
 function ModalEditarFolios({ folios, folioInfoMap, usuarios, onSave, onClose }) {
   const mesLabel = (ym) => {
@@ -2862,13 +2944,19 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
   const pagosInstructoresMesActual = useMemo(() => calcPagosInstructores(crmData, cmActualInst), [crmData, cmActualInst]);
   const totalMesPasadoInst = pagosInstructoresMesPasado.reduce((s, r) => s + r.monto, 0);
   const totalMesActualInst = pagosInstructoresMesActual.reduce((s, r) => s + r.monto, 0);
+  // Con abonos parciales, el encabezado de cada columna distingue el total calculado
+  // por horas, lo ya abonado y lo que realmente falta por liquidar.
+  const abonadoMesPasadoInst = +pagosInstructoresMesPasado.reduce((s, r) => s + saldoInstr(pagosGastos2, r, mesPasadoInst).pagado, 0).toFixed(2);
+  const restaMesPasadoInst = +pagosInstructoresMesPasado.reduce((s, r) => s + restaInstr(pagosGastos2, r, mesPasadoInst), 0).toFixed(2);
+  const abonadoMesActualInst = +pagosInstructoresMesActual.reduce((s, r) => s + saldoInstr(pagosGastos2, r, cmActualInst).pagado, 0).toFixed(2);
+  const restaMesActualInst = +pagosInstructoresMesActual.reduce((s, r) => s + restaInstr(pagosGastos2, r, cmActualInst), 0).toFixed(2);
   // Resumen de PAGOS A INSTRUCTORES, con el mismo criterio de mes vencido que las
   // comisiones: lo de un mes se liquida el 15 del mes siguiente.
-  const instrPagado = (r, mes) => pagosGastos2.some((p) => p.cat === "Pago Instructores" && p.instructorId === r.id && mesHorasInstr(p) === mes);
+  const instrPagado = (r, mes) => restaInstr(pagosGastos2, r, mes) === 0 && pagosInstrDe(pagosGastos2, r.id, mes).length > 0;
   const instrStats = useMemo(() => {
-    const caido = pagosInstructoresMesPasado.filter((r) => r.monto > 0 && !instrPagado(r, mesPasadoInst));
-    const enCurso = pagosInstructoresMesActual.filter((r) => r.monto > 0 && !instrPagado(r, cmActualInst));
-    const sum = (a) => +a.reduce((s, r) => s + r.monto, 0).toFixed(2);
+    const caido = pagosInstructoresMesPasado.filter((r) => r.monto > 0 && restaInstr(pagosGastos2, r, mesPasadoInst) > 0);
+    const enCurso = pagosInstructoresMesActual.filter((r) => r.monto > 0 && restaInstr(pagosGastos2, r, cmActualInst) > 0);
+    const sum = (a) => +a.reduce((s, r) => s + restaInstr(pagosGastos2, r, r.mes), 0).toFixed(2);
     const pagadoHist = +pagosGastos2.filter((p) => p.cat === "Pago Instructores").reduce((s, p) => s + (p.monto || 0), 0).toFixed(2);
     const nombres = /* @__PURE__ */ new Set([...caido, ...enCurso].map((r) => r.id));
     const horas = +[...pagosInstructoresMesPasado, ...pagosInstructoresMesActual].reduce((s, r) => s + (r.horas || 0), 0).toFixed(2);
@@ -2907,26 +2995,44 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     return pagosGastos2.find((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado);
   }
   function yaPagadoInstructor(r) {
-    return pagosGastos2.find((p) => p.cat === "Pago Instructores" && p.instructorId === r.id && mesHorasInstr(p) === r.mes);
+    const s = saldoInstr(pagosGastos2, r);
+    return s.liquidado ? s.regs[s.regs.length - 1] : null;
   }
-  async function confirmarPagoInstructor(r, fecha) {
+  // `d` = { fecha, monto, notas }. `monto` es lo que se entrega AHORA: si es menor al
+  // saldo, queda como abono y el instructor sigue apareciendo con lo que falta.
+  async function confirmarPagoInstructor(r, d) {
+    const fecha = typeof d === "string" ? d : d.fecha;
+    const s = saldoInstr(pagosGastos2, r);
+    const bruto = typeof d === "string" ? s.resta : parseFloat(d.monto);
+    const monto = +(Math.round((bruto || 0) * 100) / 100).toFixed(2);
+    if (!(monto > 0)) { alert("El monto a pagar debe ser mayor a 0."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fecha || ""))) { alert("Fecha inv\xE1lida."); return; }
+    const restante = +(s.resta - monto).toFixed(2);
+    const esParcial = restante > CENT_INSTR;
     const partes = [];
     if (r.hPrincipal > 0) partes.push(`${r.hPrincipal}h Principal \u00D7 ${fmt$(r.tarifaHora)}`);
     if (r.hAsistente > 0) partes.push(`${r.hAsistente}h Asistente \u00D7 ${fmt$(r.tarifaHoraAsistente)}`);
+    const nAbono = s.regs.length + 1;
     const pago = {
       id: uid(),
       gastoId: null,
-      desc: `Pago instructor \u2014 ${r.nombre} (${partes.join(" + ")})`,
-      monto: r.monto,
+      desc: (esParcial || s.regs.length > 0)
+        ? `Pago instructor \u2014 ${r.nombre} (abono ${nAbono}${esParcial ? "" : " \u2014 liquida"}: ${partes.join(" + ")})`
+        : `Pago instructor \u2014 ${r.nombre} (${partes.join(" + ")})`,
+      monto,
       fecha,
       date: fecha,
       // El gasto pertenece al mes en que se paga; las horas conservan el suyo.
       mes: String(fecha).slice(0, 7) || r.mes,
       instrMesHoras: r.mes,
       cat: "Pago Instructores",
-      notas: "",
+      notas: (typeof d === "object" && d.notas) ? d.notas : (esParcial ? `Pago parcial \xB7 quedan ${fmt$(restante)} por liquidar` : ""),
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-      instructorId: r.id
+      instructorId: r.id,
+      // Campos informativos del abono, para poder auditar el adeudo sin recalcular.
+      instrParcial: esParcial,
+      instrTotalCalculado: s.total,
+      instrRestanteTrasPago: esParcial ? restante : 0
     };
     const upd = [...pagosGastos2, pago];
     setPagosGastos2(upd);
@@ -3045,27 +3151,45 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
   })))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700 } }, disp(c.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, "comisi\u00F3n")), !c.pagado && /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: () => setPagando(c) }, "\u2713 Marcar pagado"), c.pagado && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagada"), c.pagado.fecha && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginTop: 3 } }, "\u{1F5D3}\uFE0F ", c.pagado.fecha), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar en qu\xE9 fecha/mes se pag\xF3", style: { fontSize: 10, padding: "2px 6px", marginTop: 4 }, onClick: () => editarFechaPagoComision(c) }, "\u{1F4C5} Editar fecha"))));
   }
   function filaInstructor(r, mostrarBoton) {
-    const pagado = yaPagadoInstructor(r);
-    return /* @__PURE__ */ React.createElement("div", { key: r.id + "_" + r.mes, className: "exp-item", style: { borderColor: pagado ? "rgba(16,201,138,.4)" : "var(--br)" } },
+    const s = saldoInstr(pagosGastos2, r);
+    const pagado = s.liquidado;
+    const parcial = s.parcial;
+    return /* @__PURE__ */ React.createElement("div", { key: r.id + "_" + r.mes, className: "exp-item", style: { borderColor: pagado ? "rgba(16,201,138,.4)" : parcial ? "rgba(245,193,71,.55)" : "var(--br)" } },
       /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } },
         /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
           /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, r.nombre),
-          pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : (mostrarBoton ? /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente") : /* @__PURE__ */ React.createElement("span", { className: "badge b-ac" }, "\u{1F441}\uFE0F En curso"))
+          pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado")
+            : parcial ? /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u25D0 Pago parcial")
+            : (mostrarBoton ? /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente") : /* @__PURE__ */ React.createElement("span", { className: "badge b-ac" }, "\u{1F441}\uFE0F En curso"))
         ),
         /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } },
           r.hPrincipal > 0 && /* @__PURE__ */ React.createElement("span", null, "\u{1F468}\u200D\u{1F3EB} ", r.hPrincipal, " hrs \u00D7 ", fmt$(r.tarifaHora)),
           r.hAsistente > 0 && /* @__PURE__ */ React.createElement("span", null, "\u{1F91D} ", r.hAsistente, " hrs \u00D7 ", fmt$(r.tarifaHoraAsistente)),
-          pagado && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F5D3}\uFE0F Pagado el ", fmtD(pagado.fecha || pagado.date), pagado.notas ? " \xB7 " + pagado.notas : "")
-        )
+          s.regs.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F4B5} Abonado ", disp(s.pagado), " de ", disp(s.total)),
+          parcial && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)", fontWeight: 700 } }, "\u23F3 Falta ", disp(s.resta)),
+          s.saldoFavor > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--ac)" } }, "\u2191 Pagado de m\xE1s ", disp(s.saldoFavor))
+        ),
+        // Barra de avance del adeudo: se llena conforme se abona.
+        s.regs.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s1)", borderRadius: 20, height: 6, overflow: "hidden", marginTop: 7, maxWidth: 280 } },
+          /* @__PURE__ */ React.createElement("div", { style: { width: Math.min(100, s.total > 0 ? s.pagado / s.total * 100 : 100) + "%", height: "100%", background: pagado ? "var(--gr)" : "var(--am)", transition: "width .3s" } })),
+        s.regs.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 7, display: "flex", flexDirection: "column", gap: 4 } },
+          s.regs.map((p, idx) => /* @__PURE__ */ React.createElement("div", { key: p.id, style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11, color: "var(--tx2)", background: "var(--s1)", border: "1px solid var(--br)", borderRadius: 6, padding: "3px 8px" } },
+            /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, color: "var(--tx3)" } }, s.regs.length > 1 ? "Abono " + (idx + 1) : "Pago"),
+            /* @__PURE__ */ React.createElement("span", null, "\u{1F5D3}\uFE0F ", fmtD(p.fecha || p.date)),
+            /* @__PURE__ */ React.createElement("span", { className: "mono", style: { fontWeight: 700, color: "var(--gr)" } }, disp(p.monto)),
+            p.notas && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)" } }, "\xB7 ", p.notas),
+            /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Cambiar fecha, monto o deshacer este pago", style: { fontSize: 10, padding: "1px 6px", marginLeft: "auto" }, onClick: () => setEditandoInstr({ r, registro: p, saldo: s }) }, "\u270E"))))
       ),
       /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
         /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } },
-          /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700 } }, disp(r.monto)),
-          /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, mesLabel(r.mes))
+          /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700, color: pagado ? "var(--gr)" : parcial ? "var(--am)" : void 0 } }, disp(pagado ? s.total : s.resta)),
+          /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, parcial ? "falta \xB7 " + mesLabel(r.mes) : mesLabel(r.mes))
         ),
         pagado
-          ? /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Cambiar fecha, monto o deshacer el pago", onClick: () => setEditandoInstr({ r, registro: pagado }) }, "\u270E Editar")
-          : (r.monto > 0 && /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", title: mostrarBoton ? "Registrar el pago de este mes vencido" : "Pagar por adelantado las horas que lleva en el mes en curso", onClick: () => setPagandoInstr(r) }, mostrarBoton ? "\u2713 Marcar pagado" : "\u{1F4B8} Pagar ahora"))
+          ? /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Cambiar fecha, monto o deshacer el pago", onClick: () => setEditandoInstr({ r, registro: s.regs[s.regs.length - 1], saldo: s }) }, "\u270E Editar")
+          : (r.monto > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 5 } },
+              /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", title: parcial ? "Pagar el saldo que falta: " + fmt$(s.resta) : (mostrarBoton ? "Registrar el pago de este mes vencido" : "Pagar por adelantado las horas que lleva en el mes en curso"), onClick: () => setPagandoInstr({ r, modo: "total" }) }, parcial ? "\u2713 Liquidar saldo" : (mostrarBoton ? "\u2713 Marcar pagado" : "\u{1F4B8} Pagar ahora")),
+              /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Registrar un abono menor al total; el resto sigue apareciendo como pendiente", style: { fontSize: 11 }, onClick: () => setPagandoInstr({ r, modo: "parcial" }) }, "\u25D0 Pago parcial")))
       )
     );
   }
@@ -3193,7 +3317,7 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     React.createElement("div", { className: "instr-col", style: { flex: "1 1 380px", minWidth: 320 } },
     /* @__PURE__ */ React.createElement("div", { className: "sec-hdr", style: { marginTop: 28 } }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F468}\u200D\u{1F3EB} Horas clase del mes pasado \u2014 ", mesLabel(mesPasadoInst))),
     /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", border: "1px solid var(--br)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 12, color: "var(--tx2)", lineHeight: 1.6 } }, "\u{1F4A1} Horas finalizadas en ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--tx)" } }, mesLabel(mesPasadoInst)), " que se ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--gr)" } }, "pagan este mes"), ". Este es el gasto real de n\u00F3mina de instructores del mes en curso, y es el que se refleja en Proyecci\u00F3n."),
-    /* @__PURE__ */ React.createElement("div", { className: "mini-stat", title: "La lista de abajo es el desglose de esta cifra", onClick: () => { var el = document.querySelectorAll(".instr-col")[0]; if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, style: { marginBottom: 16, maxWidth: 260, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, "Total a pagar este mes"), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: "var(--am)" } }, disp(totalMesPasadoInst))),
+    /* @__PURE__ */ React.createElement("div", { className: "mini-stat", title: "La lista de abajo es el desglose de esta cifra", onClick: () => { var el = document.querySelectorAll(".instr-col")[0]; if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, style: { marginBottom: 16, maxWidth: 260, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, abonadoMesPasadoInst > 0 ? "Falta por pagar este mes" : "Total a pagar este mes"), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: restaMesPasadoInst > 0 ? "var(--am)" : "var(--gr)" } }, disp(restaMesPasadoInst)), abonadoMesPasadoInst > 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginTop: 3 } }, "Total por horas ", disp(totalMesPasadoInst), " \xB7 abonado ", disp(abonadoMesPasadoInst))),
     React.createElement("div", { style: { borderLeft: "3px solid var(--rd)", paddingLeft: 12 } },
       pagosInstructoresMesPasado.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, /* @__PURE__ */ React.createElement("div", { className: "empty-icon" }, "\u{1F468}\u200D\u{1F3EB}"), /* @__PURE__ */ React.createElement("div", { className: "empty-ttl" }, "Sin horas finalizadas en ", mesLabel(mesPasadoInst)), /* @__PURE__ */ React.createElement("div", { className: "empty-sub" }, 'En cuanto un instructor finalice una clase en "Horarios", aparecer\u00E1 aqu\u00ED.')) : pagosInstructoresMesPasado.map((r) => filaInstructor(r, true))
     ),
@@ -3201,14 +3325,14 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     React.createElement("div", { className: "instr-col", style: { flex: "1 1 380px", minWidth: 320 } },
     /* @__PURE__ */ React.createElement("div", { className: "sec-hdr", style: { marginTop: 28 } }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4C5} Horas clase en mes en curso \u2014 ", mesLabel(cmActualInst))),
     /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", border: "1px solid var(--br)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 12, color: "var(--tx2)", lineHeight: 1.6 } }, "\u{1F441}\uFE0F Vista previa: horas que los instructores est\u00E1n dando ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--tx)" } }, "este mes"), ", que se pagar\u00E1n hasta ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--tx)" } }, mesLabel(nextMonth(cmActualInst))), ". Informativo \u00FAnicamente, no genera acciones de pago todav\u00EDa."),
-    /* @__PURE__ */ React.createElement("div", { className: "mini-stat", title: "La lista de abajo es el desglose de esta cifra", onClick: () => { var el = document.querySelectorAll(".instr-col")[1]; if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, style: { marginBottom: 16, maxWidth: 260, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, "Total acumulado (vista previa)"), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: "var(--ac)" } }, disp(totalMesActualInst))),
+    /* @__PURE__ */ React.createElement("div", { className: "mini-stat", title: "La lista de abajo es el desglose de esta cifra", onClick: () => { var el = document.querySelectorAll(".instr-col")[1]; if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, style: { marginBottom: 16, maxWidth: 260, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, "Total acumulado (vista previa)"), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: "var(--ac)" } }, disp(totalMesActualInst)), abonadoMesActualInst > 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginTop: 3 } }, "Adelantado ", disp(abonadoMesActualInst), " \xB7 falta ", disp(restaMesActualInst))),
     React.createElement("div", { style: { borderLeft: "3px solid var(--ac)", paddingLeft: 12 } },
       pagosInstructoresMesActual.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, /* @__PURE__ */ React.createElement("div", { className: "empty-icon" }, "\u{1F4C5}"), /* @__PURE__ */ React.createElement("div", { className: "empty-ttl" }, "Sin horas registradas este mes todav\u00EDa"), /* @__PURE__ */ React.createElement("div", { className: "empty-sub" }, "Se ir\u00E1n acumulando conforme los instructores den clase.")) : pagosInstructoresMesActual.map((r) => filaInstructor(r, false))
     ),
     )
     ),
-    pagandoInstr && /* @__PURE__ */ React.createElement(ModalConfirmarPagoInstructor, { pago: pagandoInstr, onSave: (f) => confirmarPagoInstructor(pagandoInstr, f), onClose: () => setPagandoInstr(null) }),
-    editandoInstr && /* @__PURE__ */ React.createElement(ModalEditarPagoInstructor, { pago: editandoInstr.r, registro: editandoInstr.registro, onSave: (c) => guardarEdicionPagoInstructor(editandoInstr.registro, c), onDelete: () => deshacerPagoInstructor(editandoInstr.registro), onClose: () => setEditandoInstr(null) })
+    pagandoInstr && /* @__PURE__ */ React.createElement(ModalConfirmarPagoInstructor, { pago: pagandoInstr.r || pagandoInstr, saldo: saldoInstr(pagosGastos2, pagandoInstr.r || pagandoInstr), modoInicial: pagandoInstr.modo, onSave: (d) => confirmarPagoInstructor(pagandoInstr.r || pagandoInstr, d), onClose: () => setPagandoInstr(null) }),
+    editandoInstr && /* @__PURE__ */ React.createElement(ModalEditarPagoInstructor, { pago: editandoInstr.r, registro: editandoInstr.registro, saldo: editandoInstr.saldo || saldoInstr(pagosGastos2, editandoInstr.r), onSave: (c) => guardarEdicionPagoInstructor(editandoInstr.registro, c), onDelete: () => deshacerPagoInstructor(editandoInstr.registro), onClose: () => setEditandoInstr(null) })
   );
 }
 function ModalEditarGasto({ pago, onSave, onClose }) {
@@ -3908,7 +4032,10 @@ function App() {
       const partes = [];
       if (r.hPrincipal > 0) partes.push(`${r.hPrincipal}h Principal \u00D7 ${fmt$(r.tarifaHora)}`);
       if (r.hAsistente > 0) partes.push(`${r.hAsistente}h Asistente \u00D7 ${fmt$(r.tarifaHoraAsistente)}`);
-      const pagoI = { id: uid(), gastoId: null, desc: `Pago instructor \u2014 ${r.nombre} (${partes.join(" + ")})`, monto: r.monto, fecha: p._fecha, date: p._fecha, mes: p._mesRef, cat: "Pago Instructores", notas: "Marcado pagado desde recordatorio", createdAt: (/* @__PURE__ */ new Date()).toISOString(), instructorId: r.id };
+      // Si ya había abonos parciales, desde el recordatorio se liquida solo el saldo.
+      const _saldoI = p._saldo != null ? p._saldo : saldoInstr(pagosGastos2, r, p._mesRef).resta;
+      if (!(_saldoI > 0)) return;
+      const pagoI = { id: uid(), gastoId: null, desc: `Pago instructor \u2014 ${r.nombre} (${partes.join(" + ")})`, monto: _saldoI, fecha: p._fecha, date: p._fecha, mes: String(p._fecha).slice(0, 7) || p._mesRef, instrMesHoras: p._mesRef, cat: "Pago Instructores", notas: "Marcado pagado desde recordatorio", createdAt: (/* @__PURE__ */ new Date()).toISOString(), instructorId: r.id };
       const updI = [...pagosGastos2, pagoI];
       setPagosGastos2(updI);
       await stor("set", "pagosGastos", updI);
@@ -3982,9 +4109,10 @@ function App() {
     const diffInstr = Math.round((new Date(fechaInstr + "T00:00:00") - new Date(hoyISO + "T00:00:00")) / 864e5);
     if (diffInstr <= 7) {
       calcPagosInstructores(crmData, mesVencido)
-        .filter((r) => r.monto > 0 && !pagosGastos2.some((p) => p.cat === "Pago Instructores" && p.instructorId === r.id && mesHorasInstr(p) === mesVencido))
-        .forEach((r) => {
-          out.push({ id: "instr-" + r.id + "-" + mesVencido, desc: "\u{1F468}\u200D\u{1F3EB} " + r.nombre + " \u2014 " + r.horas + "h de " + mesLabelGlobal(mesVencido), cat: "Pago Instructores", monto: r.monto, frecuencia: "mensual", diaMes: DIA_PAGO_INSTRUCTORES, _fecha: fechaInstr, _nomina: "instructor", _ref: r, _mesRef: mesVencido, daysUntilDue: diffInstr, isOverdue: diffInstr < 0, isDueSoon: diffInstr >= 0 && diffInstr <= 7 });
+        .map((r) => ({ r, s: saldoInstr(pagosGastos2, r, mesVencido) }))
+        .filter(({ s }) => s.resta > 0)
+        .forEach(({ r, s }) => {
+          out.push({ id: "instr-" + r.id + "-" + mesVencido, desc: "\u{1F468}\u200D\u{1F3EB} " + r.nombre + " \u2014 " + r.horas + "h de " + mesLabelGlobal(mesVencido) + (s.parcial ? " \xB7 saldo (abonado " + fmt$(s.pagado) + " de " + fmt$(s.total) + ")" : ""), cat: "Pago Instructores", monto: s.resta, frecuencia: "mensual", dia: DIA_PAGO_INSTRUCTORES, diaMes: DIA_PAGO_INSTRUCTORES, _fecha: fechaInstr, _nomina: "instructor", _ref: r, _mesRef: mesVencido, _saldo: s.resta, daysUntilDue: diffInstr, isOverdue: diffInstr < 0, isDueSoon: diffInstr >= 0 && diffInstr <= 7 });
         });
     }
     if (diff15 <= 7) {
@@ -3992,7 +4120,7 @@ function App() {
         aplicarOverridesComisiones(calcComisiones(crmData), comisionOverrides, (crmData == null ? void 0 : crmData.usuarios) || [], pagosGastos2, crmData, retos)
           .filter((c) => c.mesPago === cmNow && c.monto > 0 && !pagosGastos2.some((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado))
           .forEach((c) => {
-            out.push({ id: "comi-" + c.usuario + "-" + c.mesGanado, desc: "\u{1F4BC} Comisi\xF3n " + c.nombreUsuario + " \u2014 " + c.count + " contrato" + (c.count !== 1 ? "s" : "") + " de " + mesLabelGlobal(c.mesGanado), cat: "Comisiones", monto: c.monto, frecuencia: "mensual", diaMes: 15, _fecha: fecha15, _nomina: "comision", _ref: c, _mesRef: c.mesGanado, daysUntilDue: diff15, isOverdue: diff15 < 0, isDueSoon: diff15 >= 0 && diff15 <= 7 });
+            out.push({ id: "comi-" + c.usuario + "-" + c.mesGanado, desc: "\u{1F4BC} Comisi\xF3n " + c.nombreUsuario + " \u2014 " + c.count + " contrato" + (c.count !== 1 ? "s" : "") + " de " + mesLabelGlobal(c.mesGanado), cat: "Comisiones", monto: c.monto, frecuencia: "mensual", dia: DIA_PAGO_COMISIONES, diaMes: DIA_PAGO_COMISIONES, _fecha: fecha15, _nomina: "comision", _ref: c, _mesRef: c.mesGanado, daysUntilDue: diff15, isOverdue: diff15 < 0, isDueSoon: diff15 >= 0 && diff15 <= 7 });
           });
       } catch (e) { console.error("upcoming comisiones:", e); }
     }
@@ -4039,8 +4167,7 @@ function App() {
     // el gasto del mes se quedaba corto justo por el importe de la nómina de instructores.
     const mesVenc = prevMonth(cmNow);
     const instrPend = (crmData ? calcPagosInstructores(crmData, mesVenc) : [])
-      .filter((r) => r.monto > 0 && !pagosGastos2.some((p) => p.cat === "Pago Instructores" && p.instructorId === r.id && mesHorasInstr(p) === mesVenc))
-      .reduce((s, r) => s + r.monto, 0);
+      .reduce((s, r) => s + restaInstr(pagosGastos2, r, mesVenc), 0);
     // 5. Pagos a instructores ya liquidados con fecha de ESTE mes (adelantos incluidos):
     // son dinero que ya salió y debe estar dentro del gasto real del mes.
     const instrPagadoMes = pagosGastos2
@@ -4334,7 +4461,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.09.09-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.09.11-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -4370,7 +4497,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.09.09-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.09.11-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

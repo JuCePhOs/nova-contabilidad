@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.09.23-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.09.24-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.09.23-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.09.24-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -189,7 +189,7 @@ const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.09.23-1";
+const BUILD_VERSION = "BUILD v2026.09.24-1";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -417,11 +417,77 @@ function matriculasPendientesCRM(crm, mesRef) {
   const pagados = new Set(pagosR.filter(cubre).map((p) => String(p.crmFolio)));
   const conPagoUnico = new Set(mats.filter((m) => m.pagoTipo === "unico").filter((m) => pagosR.some((p) => String(p.crmFolio) === String(m.folio))).map((m) => String(m.folio)));
   return mats.filter((m) => {
+    if (saldosParcialesCRM(crm, m, cm).length) return true; // pago parcial con saldo por cobrar
     if (m.pagoTipo === "unico" && m.fechaISO && m.fechaISO.slice(0, 7) < MES_INICIO_ACADEMIA_CONTA) return false;
     if (conPagoUnico.has(String(m.folio))) return false;
     if ((m.pausasPago || []).indexOf(cm) >= 0) return false;
     return !pagados.has(String(m.folio));
   });
+}
+// ── SALDOS DE PAGOS PARCIALES (mismo criterio que el CRM) ─────────────────────
+// Un pago parcial cubre su mes pero NO lo salda: lo que falta (total pactado menos todo
+// lo cobrado de ese folio para ese mes) sigue siendo un pago pendiente por cobrar.
+function _montoPagoCRMConta(p) {
+  if (!p) return 0;
+  const v = p.montoFinal != null ? p.montoFinal : (p.monto != null ? p.monto : p.subtotal);
+  return parseFloat(v) || 0;
+}
+function _mesesPagoCRMConta(p) {
+  const ms = (Array.isArray(p && p.meses) ? p.meses : (p && p.meses ? Object.values(p.meses) : [])).filter(Boolean);
+  if (ms.length) return ms;
+  const x = (p && p.mes) || String((p && (p.fechaISO || p.fecha)) || "").slice(0, 7);
+  return /^\d{4}-\d{2}$/.test(x) ? [x] : [];
+}
+function _esperadoParcialConta(p) {
+  if (!p) return 0;
+  const e = parseFloat(p.montoEsperado) || 0;
+  if (e > 0) return e;
+  const r = parseFloat(p.restante) || 0;
+  return r > 0 ? +(_montoPagoCRMConta(p) + r).toFixed(2) : 0;
+}
+function esPagoParcialConta(p) {
+  return !!p && (p.parcial === true || String(p.method || "").indexOf("parcial") === 0) && _esperadoParcialConta(p) > 0;
+}
+// [{mes, esperado, pagado, restante, pagos}] de una matrícula. `hastaMes` limita a lo exigible;
+// `hastaFecha` (AAAA-MM-DD, opcional) cuenta solo lo cobrado hasta ese día.
+function saldosParcialesCRM(crm, m, hastaMes, hastaFecha) {
+  if (!m) return [];
+  const folio = String(m.folio);
+  const propios = (((crm || {}).pagosRegulares) || []).filter((p) => p && String(p.crmFolio) === folio);
+  const parciales = propios.filter(esPagoParcialConta);
+  if (!parciales.length) return [];
+  const fechaDe = (p) => String(p.fechaISO || "").slice(0, 10) || (/^\d{4}-\d{2}-\d{2}/.test(String(p.fecha || "")) ? String(p.fecha).slice(0, 10) : "");
+  const cuenta = (p) => !hastaFecha || !fechaDe(p) || fechaDe(p) <= hastaFecha;
+  const out = [];
+  if (m.pagoTipo === "unico") {
+    const esperado = Math.max.apply(null, parciales.map(_esperadoParcialConta));
+    const pagado = propios.filter(cuenta).reduce((s, p) => s + _montoPagoCRMConta(p), 0);
+    const mes = parciales.map((p) => _mesesPagoCRMConta(p)[0] || "").filter(Boolean).sort()[0] || monthStr();
+    out.push({ mes, esperado: +esperado.toFixed(2), pagado: +pagado.toFixed(2), restante: +(esperado - pagado).toFixed(2) });
+  } else {
+    const porMes = {};
+    parciales.forEach((p) => {
+      const ms = _mesesPagoCRMConta(p);
+      ms.forEach((x) => { porMes[x] = Math.max(porMes[x] || 0, _esperadoParcialConta(p) / ms.length); });
+    });
+    Object.keys(porMes).sort().forEach((x) => {
+      if (hastaMes && x > hastaMes) return;
+      const pagado = propios.filter(cuenta).reduce((s, p) => {
+        const ms = _mesesPagoCRMConta(p);
+        return ms.indexOf(x) >= 0 ? s + _montoPagoCRMConta(p) / ms.length : s;
+      }, 0);
+      out.push({ mes: x, esperado: +porMes[x].toFixed(2), pagado: +pagado.toFixed(2), restante: +(porMes[x] - pagado).toFixed(2) });
+    });
+  }
+  return out.filter((x) => x.restante > 0.009);
+}
+function matriculasConSaldoParcialCRM(crm, mesRef) {
+  const cm = mesRef || monthStr();
+  return (((crm || {})["matr\xEDculas"]) || []).filter((m) => saldosParcialesCRM(crm, m, cm).length > 0);
+}
+function totalSaldoParcialCRM(crm, mesRef) {
+  const cm = mesRef || monthStr();
+  return +matriculasConSaldoParcialCRM(crm, cm).reduce((s, m) => s + saldosParcialesCRM(crm, m, cm).reduce((a, x) => a + x.restante, 0), 0).toFixed(2);
 }
 function crmAlumnos(crm) {
   if (!(crm == null ? void 0 : crm.matr\u00EDculas)) return [];
@@ -1343,7 +1409,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
       var _a, _b;
       return (((_a = p.fecha) == null ? void 0 : _a.startsWith(cm2)) || ((_b = p.fechaISO) == null ? void 0 : _b.startsWith(cm2))) && !procesadosCRM.has(String(p.crmFolio));
     }).reduce((s, p) => s + (p.montoFinal || 0), 0);
-    return /* @__PURE__ */ React.createElement("div", { className: "crm-banner", style: { marginTop: 14, flexDirection: "column", alignItems: "flex-start", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, width: "100%" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 22 } }, "\u{1F517}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--pu)", fontSize: 13 } }, "CRM NOVA IA Academy"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx2)" } }, alumnos.length, " alumnos \xB7 ", cursoCount, " cursos"), crmSource === "firebase" && /* @__PURE__ */ React.createElement("span", { style: { background: "rgba(16,201,138,.15)", color: "var(--gr)", border: "1px solid rgba(16,201,138,.3)", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 600 } }, "\u2601\uFE0F Firebase \u2014 Tiempo real \xB7 cualquier dispositivo"), crmSource === "claude" && /* @__PURE__ */ React.createElement("span", { style: { background: "rgba(34,212,239,.1)", color: "var(--ac)", border: "1px solid rgba(34,212,239,.3)", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 600 } }, "\u{1F535} Claude Storage \u2014 mismo navegador"), crmSource === "local" && /* @__PURE__ */ React.createElement("span", { style: { background: "rgba(245,193,71,.1)", color: "var(--am)", border: "1px solid rgba(245,193,71,.3)", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 600 } }, "\u{1F4BE} Local \u2014 solo esta computadora"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-sm", style: { background: "rgba(155,114,248,.2)", color: "var(--pu)", border: "1px solid rgba(155,114,248,.3)" }, onClick: refrescarCRM, title: "Actualizar ahora" }, "\u27F3"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-sm", style: { background: "rgba(155,114,248,.2)", color: "var(--pu)", border: "1px solid rgba(155,114,248,.3)" }, onClick: () => setTab("alumnos") }, "Ver Alumnos \u2192"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 } }, /* @__PURE__ */ React.createElement("span", null, "\u2705 Pagaron ", cmLabel, ": ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--gr)" } }, Math.max(0, (((crmData || {})["matr\xEDculas"]) || []).length - morosos.length))), /* @__PURE__ */ React.createElement("span", null, "\u26A0\uFE0F Sin pago: ", /* @__PURE__ */ React.createElement("strong", { style: { color: morosos.length > 0 ? "var(--rd)" : "var(--tx2)" } }, morosos.length)), ingresoCRM > 0 && /* @__PURE__ */ React.createElement("span", null, "\u{1F4B3} Pagos CRM: ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--pu)", fontFamily: "var(--mono)" } }, fmt$(ingresoCRM))), morosos.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)", fontSize: 11 } }, morosos.slice(0, 3).map((a) => String(a.alumno || "").split(" ")[0]).join(", "), morosos.length > 3 ? ` +${morosos.length - 3} m\xE1s` : "")));
+    return /* @__PURE__ */ React.createElement("div", { className: "crm-banner", style: { marginTop: 14, flexDirection: "column", alignItems: "flex-start", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, width: "100%" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 22 } }, "\u{1F517}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--pu)", fontSize: 13 } }, "CRM NOVA IA Academy"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx2)" } }, alumnos.length, " alumnos \xB7 ", cursoCount, " cursos"), crmSource === "firebase" && /* @__PURE__ */ React.createElement("span", { style: { background: "rgba(16,201,138,.15)", color: "var(--gr)", border: "1px solid rgba(16,201,138,.3)", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 600 } }, "\u2601\uFE0F Firebase \u2014 Tiempo real \xB7 cualquier dispositivo"), crmSource === "claude" && /* @__PURE__ */ React.createElement("span", { style: { background: "rgba(34,212,239,.1)", color: "var(--ac)", border: "1px solid rgba(34,212,239,.3)", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 600 } }, "\u{1F535} Claude Storage \u2014 mismo navegador"), crmSource === "local" && /* @__PURE__ */ React.createElement("span", { style: { background: "rgba(245,193,71,.1)", color: "var(--am)", border: "1px solid rgba(245,193,71,.3)", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 600 } }, "\u{1F4BE} Local \u2014 solo esta computadora"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-sm", style: { background: "rgba(155,114,248,.2)", color: "var(--pu)", border: "1px solid rgba(155,114,248,.3)" }, onClick: refrescarCRM, title: "Actualizar ahora" }, "\u27F3"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-sm", style: { background: "rgba(155,114,248,.2)", color: "var(--pu)", border: "1px solid rgba(155,114,248,.3)" }, onClick: () => setTab("alumnos") }, "Ver Alumnos \u2192"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 } }, /* @__PURE__ */ React.createElement("span", null, "\u2705 Pagaron ", cmLabel, ": ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--gr)" } }, Math.max(0, (((crmData || {})["matr\xEDculas"]) || []).length - morosos.length))), /* @__PURE__ */ React.createElement("span", null, "\u26A0\uFE0F Sin pago: ", /* @__PURE__ */ React.createElement("strong", { style: { color: morosos.length > 0 ? "var(--rd)" : "var(--tx2)" } }, morosos.length)), matriculasConSaldoParcialCRM(crmData, cm2).length > 0 && React.createElement("span", { className: "conta-parcial-banner", style: { color: "var(--am)", fontWeight: 700 } }, "\u{1F9FE} ", matriculasConSaldoParcialCRM(crmData, cm2).length, " con pago parcial \u2014 falta cobrar ", fmt$(totalSaldoParcialCRM(crmData, cm2))), ingresoCRM > 0 && /* @__PURE__ */ React.createElement("span", null, "\u{1F4B3} Pagos CRM: ", /* @__PURE__ */ React.createElement("strong", { style: { color: "var(--pu)", fontFamily: "var(--mono)" } }, fmt$(ingresoCRM))), morosos.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)", fontSize: 11 } }, morosos.slice(0, 3).map((a) => String(a.alumno || "").split(" ")[0]).join(", "), morosos.length > 3 ? ` +${morosos.length - 3} m\xE1s` : "")));
   })() : /* @__PURE__ */ React.createElement("div", { className: "crm-off", style: { marginTop: 14 } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F50C}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "CRM no conectado"), " \u2014 Abre el CRM NOVA IA Academy para sincronizar alumnos y detectar morosos autom\xE1ticamente.")));
 }
 // ── FICHA "INGRESOS POR DÍA" ─────────────────────────────────────────────────
@@ -1458,7 +1524,7 @@ function FichaIngresosDia({ mesRef, ingresos, crmData, dia, setDia }) {
       if (unico && c.desdeYm !== mesRef) return;
       const monto = unico ? (parseFloat(m.primerPago) || 0)
         : (parseFloat(m.pagoMensual != null ? m.pagoMensual : m.primerPago) || 0);
-      out.push({ folio: String(m.folio), alumno: m.alumno || "", curso: m.curso || "", unico, monto, fechaEsp: c.fecha });
+      out.push({ folio: String(m.folio), alumno: m.alumno || "", curso: m.curso || "", unico, monto, fechaEsp: c.fecha, _mat: m });
     });
     return out.sort((a, b) => a.fechaEsp.localeCompare(b.fechaEsp) || Number(a.folio) - Number(b.folio));
   }, [crmData, mesRef]);
@@ -1498,8 +1564,16 @@ function FichaIngresosDia({ mesRef, ingresos, crmData, dia, setDia }) {
       esperados.forEach((e) => {
         if (e.fechaEsp > f) return; // aún no le toca pagar
         const fc = pagado.conta[e.folio], fcrm = pagado.soloCRM[e.folio];
-        if (fc && fc <= f) pagados.push({ ...e, pagadoEn: fc, via: "conta" });
-        else if (fcrm && fcrm <= f) pagados.push({ ...e, pagadoEn: fcrm, via: "crm" });
+        const pagadoEn = (fc && fc <= f) ? fc : ((fcrm && fcrm <= f) ? fcrm : null);
+        if (pagadoEn) {
+          const via = (fc && fc <= f) ? "conta" : "crm";
+          // Pago parcial: lo cobrado cuenta como pagado y lo que falta sigue pendiente.
+          const sp = e._mat ? saldosParcialesCRM(crmData, e._mat, mesRef, f).find((x) => e.unico || x.mes === mesRef) : null;
+          if (sp) {
+            pagados.push({ ...e, monto: sp.pagado, pagadoEn, via, parcial: sp });
+            pend.push({ ...e, monto: sp.restante, atraso: diasEntre(e.fechaEsp, f), pagaraEn: null, parcial: sp });
+          } else pagados.push({ ...e, pagadoEn, via });
+        }
         else pend.push({ ...e, atraso: diasEntre(e.fechaEsp, f), pagaraEn: fc || fcrm || null });
       });
       out.push({
@@ -1561,7 +1635,8 @@ function FichaIngresosDia({ mesRef, ingresos, crmData, dia, setDia }) {
           ? (e.atraso > 0 ? " \xB7 " + e.atraso + " d\xEDa(s) de atraso" : " \xB7 vence hoy")
           : " \xB7 cobrado el " + fmtD(e.pagadoEn),
         tipo === "pend" && e.pagaraEn ? " \xB7 se registr\xF3 despu\xE9s, el " + fmtD(e.pagaraEn) : "",
-        tipo === "pag" && e.via === "crm" ? " \xB7 \u26A0\uFE0F solo en el CRM, falta registrarlo aqu\xED" : "")),
+        tipo === "pag" && e.via === "crm" ? " \xB7 \u26A0\uFE0F solo en el CRM, falta registrarlo aqu\xED" : ""),
+      e.parcial ? React.createElement("div", { className: "folio-parcial", style: { fontSize: 10, color: "var(--am)", fontWeight: 700, marginTop: 2 } }, "\u{1F9FE} Pago parcial \u2014 pag\xF3 " + fmt$(e.parcial.pagado) + " de " + fmt$(e.parcial.esperado) + (tipo === "pend" ? " \xB7 falta por cobrar " + fmt$(e.parcial.restante) : "")) : null),
     React.createElement("div", { className: "mono", style: { fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", color: tipo === "pend" ? "var(--rd)" : "var(--gr)" } }, fmt$(e.monto)));
   return React.createElement("div", { className: "card", style: { marginBottom: 14, padding: 0, borderColor: (foco && foco.pend.length) ? "rgba(244,107,107,.45)" : "var(--br)" } },
     React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", padding: "11px 14px", borderBottom: abierta ? "1px solid var(--br)" : "none" } },
@@ -2176,6 +2251,9 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
   const _folPendSet = useMemo(() => new Set(_pendMats.map((m) => String(m.folio))), [_pendMats]);
   const pendientes = _pendMats.length;
   const pagados = Math.max(0, (((crmData || {})["matr\xEDculas"]) || []).length - pendientes);
+  const _parcMats = useMemo(() => matriculasConSaldoParcialCRM(crmData, cm), [crmData, cm]);
+  const _saldoParcPorFolio = useMemo(() => { const o = {}; _parcMats.forEach((m) => { o[String(m.folio)] = saldosParcialesCRM(crmData, m, cm); }); return o; }, [_parcMats, crmData, cm]);
+  const _totParc = _parcMats.reduce((s, m) => s + (_saldoParcPorFolio[String(m.folio)] || []).reduce((a, x) => a + x.restante, 0), 0);
   const becasStats = useMemo(() => statsBecas(crmData), [crmData]);
   const filtrados = useMemo(
     () => filtradosBase.filter((a) => { if (filtroPago === "todos") return true; const tienePend = (a.folios || []).some((f) => _folPendSet.has(String(f))); return filtroPago === "pendientes" ? tienePend : !tienePend; }).filter((a) => !soloBecados || ((a.becas || []).length > 0)),
@@ -2251,7 +2329,7 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
     { l: "\u26A0 Sin pago este mes", v: pendientes, c: pendientes > 0 ? "var(--rd)" : "var(--tx2)", k: "pendientes", tip: "Clic: ver solo quienes NO han pagado" },
     { l: "Cursos registrados", v: cursos.length, c: "var(--pu)", k: "todos", tip: "Clic: quitar filtros" },
     { l: "\u{1F393} Matr\xEDculas becadas", v: becasStats.otorgadas, c: becasStats.otorgadas > 0 ? "#c4a000" : "var(--tx2)", k: "todos", tip: "Becas otorgadas (matr\xEDculas con beca aplicada)" }
-  ].map(({ l, v, c, k, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip, onClick: () => setFiltroPago(filtroPago === k && k !== "todos" ? "todos" : k), style: { cursor: "pointer", outline: k !== "todos" && filtroPago === k ? "2px solid " + c : "none", outlineOffset: 2 } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c, fontSize: 22, fontFamily: "var(--mono)" } }, v)))), pendientes > 0 && /* @__PURE__ */ React.createElement("div", { className: "alert al-rd", style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, "\u26A0\uFE0F"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--tx)" } }, pendientes, " alumno(s) sin pago registrado en ", cmLabel), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, opacity: 0.85, marginTop: 2 } }, 'Usa el bot\xF3n "\u{1F4B0} Registrar pago" para registrar su mensualidad.'))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center", marginBottom: 12 } },
+  ].map(({ l, v, c, k, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip, onClick: () => setFiltroPago(filtroPago === k && k !== "todos" ? "todos" : k), style: { cursor: "pointer", outline: k !== "todos" && filtroPago === k ? "2px solid " + c : "none", outlineOffset: 2 } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c, fontSize: 22, fontFamily: "var(--mono)" } }, v)))), pendientes > 0 && /* @__PURE__ */ React.createElement("div", { className: "alert al-rd", style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, "\u26A0\uFE0F"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--tx)" } }, pendientes, " alumno(s) sin pago registrado en ", cmLabel), _parcMats.length > 0 && React.createElement("div", { className: "alm-parcial-alerta", style: { fontSize: 12, fontWeight: 700, color: "var(--am)", marginTop: 2 } }, "\u{1F9FE} Incluye ", _parcMats.length, " con pago parcial \u2014 falta cobrar ", fmt$(_totParc)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, opacity: 0.85, marginTop: 2 } }, 'Usa el bot\xF3n "\u{1F4B0} Registrar pago" para registrar su mensualidad.'))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center", marginBottom: 12 } },
     [["todos", "Todos", tipoStats.todos, "var(--ac)"], ["altas", "\u{1F31F} Alumnos nuevos", tipoStats.altas, "#14b8a6"], ["nuevos", "\u{1F195} Contratos nuevos", tipoStats.nuevos, "#6366f1"], ["regulares", "\u{1F501} Regulares", tipoStats.regulares, "var(--gr)"], ["unicos", "\u{1F4B3} Pago \xFAnico", tipoStats.unicos, "#f59e0b"]].map(([k, l, n, col]) => /* @__PURE__ */ React.createElement("button", { key: k, onClick: () => setFiltroTipo(k), style: { border: "1px solid " + (filtroTipo === k ? col : "var(--br)"), background: filtroTipo === k ? col : "transparent", color: filtroTipo === k ? "#fff" : "var(--tx2)", borderRadius: 20, padding: "5px 13px", fontSize: 12, cursor: "pointer", fontWeight: 600 } }, l, " ", /* @__PURE__ */ React.createElement("span", { style: { opacity: 0.85 } }, n))),
     /* @__PURE__ */ React.createElement("button", { key: "becados", onClick: () => setSoloBecados(!soloBecados), title: "Solo alumnos con al menos una matr\xEDcula becada", style: { border: "1px solid " + (soloBecados ? "#c4a000" : "var(--br)"), background: soloBecados ? "#c4a000" : "transparent", color: soloBecados ? "#fff" : "var(--tx2)", borderRadius: 20, padding: "5px 13px", fontSize: 12, cursor: "pointer", fontWeight: 600 } }, "\u{1F393} Becados ", /* @__PURE__ */ React.createElement("span", { style: { opacity: 0.85 } }, becasStats.otorgadas)),
     /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "var(--tx3)", marginLeft: 4 } }, "Regulares = mensualidad de meses anteriores")
@@ -2271,7 +2349,8 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
     const hist = ingPorAlumno[a.alumno];
     const histCRM = ((crmData == null ? void 0 : crmData.pagosRegulares) || []).filter((p) => p.alumnoNombre === a.alumno && !procesados.has(String(p.crmFolio)));
     const totalCRM = histCRM.reduce((s, p) => s + (p.montoFinal || 0), 0);
-    return /* @__PURE__ */ React.createElement("div", { key: a.alumno, className: `alm-row ${pagado ? "alm-paid" : "alm-due"}` }, /* @__PURE__ */ React.createElement("div", { className: "alm-avatar" }, a.alumno.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } }, a.alumno, (a.becas || []).map((b) => /* @__PURE__ */ React.createElement("span", { key: b.folio, title: (b.becaNombre || "Beca") + " \xB7 folio #" + b.folio, style: { background: "#c4a000", color: "#fff", borderRadius: 5, padding: "1px 7px", fontSize: 9, fontWeight: 800, letterSpacing: ".3px" } }, "\u{1F393} BECA #", b.folio))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" } }, a.cursos.map((c) => /* @__PURE__ */ React.createElement("span", { key: c, className: "course-tag" }, c))), a.email && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 3 } }, "\u2709 ", a.email), (hist || totalCRM > 0) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 3 } }, "Hist\xF3rico: ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--mono)", color: "var(--gr)" } }, fmt$(((hist == null ? void 0 : hist.neto) || 0) + totalCRM)), (hist == null ? void 0 : hist.count) > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)" } }, " (", hist.count, " manual", histCRM.length > 0 ? `, ${histCRM.length} CRM` : "", ")"))), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } }, pagado ? /* @__PURE__ */ React.createElement("div", null, pagoCRM.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10 } }, "\u{1F4B3} CRM: ", fmt$(pagoCRM.reduce((s, p) => s + (p.montoFinal || 0), 0))), pagoManual.length === 0 && /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => procesarPagoCRM(a, pagoCRM[0]), title: "Registrar este cobro en la contabilidad (elegir m\xE9todo de pago)" }, "\u2192 Contabilidad")), pagoManual.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-gr", style: { fontSize: 10 } }, "\u2713 App: ", fmt$(pagoManual.reduce((s, i) => s + i.neto, 0)))), pagoCRM.length === 0 && pagoManual.length === 0 && /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, a.tieneMensual ? "\u2713 Pagado este mes" : "\u{1F4B3} Pago \xFAnico \u2014 sin cobro recurrente")) : /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: () => abrirModalPago(a) }, "\u{1F4B0} Registrar pago")), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar mes y fecha de pago de sus matr\xEDculas", onClick: () => setEditPagos(a.alumno), style: { marginLeft: 6, flexShrink: 0 } }, "\u270F\uFE0F"));
+    const saldosParc = (a.folios || []).reduce((arr, f) => arr.concat((_saldoParcPorFolio[String(f)] || []).map((x) => ({ ...x, folio: f }))), []);
+    return /* @__PURE__ */ React.createElement("div", { key: a.alumno, className: `alm-row ${pagado && !saldosParc.length ? "alm-paid" : "alm-due"}` }, /* @__PURE__ */ React.createElement("div", { className: "alm-avatar" }, a.alumno.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } }, a.alumno, (a.becas || []).map((b) => /* @__PURE__ */ React.createElement("span", { key: b.folio, title: (b.becaNombre || "Beca") + " \xB7 folio #" + b.folio, style: { background: "#c4a000", color: "#fff", borderRadius: 5, padding: "1px 7px", fontSize: 9, fontWeight: 800, letterSpacing: ".3px" } }, "\u{1F393} BECA #", b.folio))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" } }, a.cursos.map((c) => /* @__PURE__ */ React.createElement("span", { key: c, className: "course-tag" }, c))), a.email && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 3 } }, "\u2709 ", a.email), (hist || totalCRM > 0) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 3 } }, "Hist\xF3rico: ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--mono)", color: "var(--gr)" } }, fmt$(((hist == null ? void 0 : hist.neto) || 0) + totalCRM)), (hist == null ? void 0 : hist.count) > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)" } }, " (", hist.count, " manual", histCRM.length > 0 ? `, ${histCRM.length} CRM` : "", ")"))), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } }, saldosParc.map((x) => React.createElement("div", { key: "parc_" + x.folio + "_" + x.mes, className: "alm-parcial", style: { marginBottom: 4 } }, React.createElement("span", { className: "badge b-am", style: { fontSize: 10 }, title: "Pag\xF3 " + fmt$(x.pagado) + " de " + fmt$(x.esperado) + " \xB7 folio #" + x.folio }, "\u{1F9FE} Parcial " + mesLabelGlobal(x.mes) + " \u2014 falta " + fmt$(x.restante)))), pagado ? /* @__PURE__ */ React.createElement("div", null, pagoCRM.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10 } }, "\u{1F4B3} CRM: ", fmt$(pagoCRM.reduce((s, p) => s + (p.montoFinal || 0), 0))), pagoManual.length === 0 && /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", style: { fontSize: 10, padding: "2px 6px" }, onClick: () => procesarPagoCRM(a, pagoCRM[0]), title: "Registrar este cobro en la contabilidad (elegir m\xE9todo de pago)" }, "\u2192 Contabilidad")), pagoManual.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-gr", style: { fontSize: 10 } }, "\u2713 App: ", fmt$(pagoManual.reduce((s, i) => s + i.neto, 0)))), pagoCRM.length === 0 && pagoManual.length === 0 && /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, a.tieneMensual ? "\u2713 Pagado este mes" : "\u{1F4B3} Pago \xFAnico \u2014 sin cobro recurrente")) : /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: () => abrirModalPago(a) }, "\u{1F4B0} Registrar pago")), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar mes y fecha de pago de sus matr\xEDculas", onClick: () => setEditPagos(a.alumno), style: { marginLeft: 6, flexShrink: 0 } }, "\u270F\uFE0F"));
   })));
 }
 function ModalGastoExtraordinario({ expenseCats, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, onClose }) {
@@ -4617,7 +4696,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.09.23-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.09.24-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -4653,7 +4732,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.09.23-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.09.24-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

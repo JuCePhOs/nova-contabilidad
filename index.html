@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.10.05-3\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.10.05-4\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.05-3\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.05-4\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -197,7 +197,7 @@ const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.10.05-3";
+const BUILD_VERSION = "BUILD v2026.10.05-4";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -565,6 +565,52 @@ function crmCostoCurso(crm, nombreCurso) {
   return cur ? parseFloat(String(cur.costoBase || "").replace(/[^0-9.]/g, "")) || 0 : 0;
 }
 const COMISION_POR_CONTRATO = 120;
+// ── BONO DOMINICAL ───────────────────────────────────────────────────────────
+// Los administradores que asisten en domingo lo marcan en su perfil del CRM
+// (bonosDominicales). Cada domingo entra a sus comisiones del mes como un anexo
+// "Bono dominical" de $300 y se liquida junto con la comisión (día 15 del mes
+// siguiente). Solo el Modo Dios del CRM agrega o quita días.
+const BONO_DOMINICAL_MONTO = 300;
+const BONO_DOM_PREFIX = "BD-";
+function esFolioBono(f) { return String(f == null ? "" : f).indexOf(BONO_DOM_PREFIX) === 0; }
+function _bonoClaveUsuario(u) { return String(u || "").replace(/[.#$\[\]\/\s]/g, "_"); }
+function folioBonoDominical(b) { return BONO_DOM_PREFIX + b.fecha + "-" + _bonoClaveUsuario(b.usuario); }
+function fechaDeFolioBono(f) { return String(f).slice(BONO_DOM_PREFIX.length, BONO_DOM_PREFIX.length + 10); }
+function montoBonoDominical(b) { const v = parseFloat(b && b.monto); return v > 0 ? v : BONO_DOMINICAL_MONTO; }
+function bonosDominicalesCRM(crmData) {
+  const raw = crmData && crmData.bonosDominicales;
+  const lista = Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? Object.values(raw) : []);
+  const vistos = {};
+  const out = [];
+  lista.forEach((b) => {
+    if (!b || !b.usuario || !/^\d{4}-\d{2}-\d{2}$/.test(String(b.fecha || ""))) return;
+    const f = folioBonoDominical(b);
+    if (vistos[f]) return;
+    vistos[f] = true;
+    out.push(b);
+  });
+  return out;
+}
+function fmtFechaBono(iso) {
+  const d = new Date(String(iso) + "T12:00:00");
+  if (isNaN(d)) return String(iso || "");
+  const ms = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  return "dom " + d.getDate() + " " + ms[d.getMonth()] + " " + d.getFullYear();
+}
+function _contarBono(folios, folioMontos) {
+  const fs = folios || [];
+  const bonos = fs.filter(esFolioBono);
+  const bonoMonto = +bonos.reduce((s, f) => s + ((folioMontos && folioMontos[f] != null) ? (+folioMontos[f] || 0) : BONO_DOMINICAL_MONTO), 0).toFixed(2);
+  return { count: fs.length - bonos.length, bonoDias: bonos.length, bonoMonto, foliosBono: bonos };
+}
+// Texto corto de una comisión: contratos + anexo de bono dominical.
+function etiquetaComision(c) {
+  const partes = [];
+  const n = c.count || 0;
+  if (n > 0 || !(c.bonoDias > 0)) partes.push(n + " contrato" + (n !== 1 ? "s" : ""));
+  if (c.bonoDias > 0) partes.push("Bono dominical (" + c.bonoDias + " domingo" + (c.bonoDias !== 1 ? "s" : "") + ")");
+  return partes.join(" + ");
+}
 // Día del mes en que se liquida cada tipo de nómina (mes vencido).
 const DIA_PAGO_COMISIONES = 15;
 const DIA_PAGO_INSTRUCTORES = 10;
@@ -826,9 +872,22 @@ function calcComisiones(crmData) {
     if (!grupos[key]) grupos[key] = { usuario: creador, nombreUsuario: creador === "sin_asignar" ? "Sin asignar" : nombreDe(creador), mesGanado, folios: [] };
     grupos[key].folios.push(m.folio);
   });
+  // Anexo: bono dominical de administradores (un "folio" BD-… por domingo asistido).
+  const montosBono = {};
+  bonosDominicalesCRM(crmData).forEach((b) => {
+    const mesGanado = String(b.fecha).slice(0, 7);
+    const key = b.usuario + "|" + mesGanado;
+    if (!grupos[key]) grupos[key] = { usuario: b.usuario, nombreUsuario: nombreDe(b.usuario), mesGanado, folios: [] };
+    const fb = folioBonoDominical(b);
+    montosBono[fb] = montoBonoDominical(b);
+    grupos[key].folios.push(fb);
+  });
   return Object.values(grupos).map((g) => {
     const mesPago = nextMonth(g.mesGanado);
-    return { ...g, count: g.folios.length, monto: g.folios.length * COMISION_POR_CONTRATO, mesPago, fechaPagoDefault: `${mesPago}-15` };
+    const fm = {};
+    g.folios.forEach((f) => { fm[f] = esFolioBono(f) ? montosBono[f] : COMISION_POR_CONTRATO; });
+    const cb = _contarBono(g.folios, fm);
+    return { ...g, ...cb, monto: +Object.values(fm).reduce((s, v) => s + v, 0).toFixed(2), mesPago, fechaPagoDefault: `${mesPago}-15` };
   }).sort((a, b) => b.mesGanado.localeCompare(a.mesGanado) || a.nombreUsuario.localeCompare(b.nombreUsuario));
 }
 // ── RETOS DE VENTA ────────────────────────────────────────────────────────────
@@ -914,9 +973,17 @@ function aplicarOverridesComisiones(rawGroups, overrides, usuarios, pagosGastos,
       folioLock[f] = { usuario: p.comisionUsuario, mesGanado: p.comisionMesGanado, monto: montos[f] != null ? montos[f] : +((p.monto || 0) / (fs.length || 1)).toFixed(2) };
     });
   });
+  const _bonoMap = {};
+  bonosDominicalesCRM(crmData).forEach((b) => { _bonoMap[folioBonoDominical(b)] = b; });
   function _resolver(f, g) {
     const o = ov[f];
     const lock = folioLock[f];
+    // El bono dominical no se edita desde Contabilidad: lo controla el Modo Dios del CRM.
+    if (esFolioBono(f)) {
+      if (lock) return { usuario: lock.usuario, mesGanado: lock.mesGanado, monto: lock.monto, mesEd: false };
+      if (!g) return null;
+      return { usuario: g.usuario, mesGanado: g.mesGanado, monto: _bonoMap[f] ? montoBonoDominical(_bonoMap[f]) : BONO_DOMINICAL_MONTO, mesEd: false };
+    }
     const tieneOverride = o && (o.reasignadoA !== void 0 || o.mesPago !== void 0 || o.monto !== void 0);
     // EXCLUIDO manda siempre. Antes se ignoraba si el folio ya tenía otro ajuste (mes,
     // ejecutivo o monto) y también si estaba dentro de una comisión ya pagada, así que
@@ -968,7 +1035,7 @@ function aplicarOverridesComisiones(rawGroups, overrides, usuarios, pagosGastos,
     let _montoFinal = it.monto;
     const _ovF = ov[it.folio];
     const _montoEditado = _ovF && _ovF.monto !== void 0;
-    if (!_montoEditado && crmData && (retos || []).length) {
+    if (!esFolioBono(it.folio) && !_montoEditado && crmData && (retos || []).length) {
       (retos || []).forEach((rt) => {
         if (!_retoAplica(rt, crmData, it.usuario, it.folio)) return;
         const prog = calcProgresoReto(rt, crmData);
@@ -984,7 +1051,7 @@ function aplicarOverridesComisiones(rawGroups, overrides, usuarios, pagosGastos,
   return Object.values(grupos).map((g) => {
     const mesPago = nextMonth(g.mesGanado);
     const montoTotal = Object.values(g.folioMontos).reduce((s, v) => s + (v || 0), 0);
-    return { ...g, count: g.folios.length, monto: +montoTotal.toFixed(2), mesPago, fechaPagoDefault: `${mesPago}-15` };
+    return { ...g, ..._contarBono(g.folios, g.folioMontos), monto: +montoTotal.toFixed(2), mesPago, fechaPagoDefault: `${mesPago}-15` };
   }).sort((a, b) => b.mesGanado.localeCompare(a.mesGanado) || a.nombreUsuario.localeCompare(b.nombreUsuario));
 }
 // Todos los registros de pago de una comisión usuario+mes (puede haber varios: uno por
@@ -1013,8 +1080,8 @@ function dividirComisionesPorPago(comisiones, pagos) {
     const foliosPend = c.folios.filter((f) => !cubiertos.has(String(f)));
     const _sub = (fols) => {
       const fm = {};
-      fols.forEach((f) => { fm[f] = (c.folioMontos && c.folioMontos[f] != null) ? c.folioMontos[f] : COMISION_POR_CONTRATO; });
-      return { folios: fols, folioMontos: fm, count: fols.length, monto: +Object.values(fm).reduce((s, v) => s + (v || 0), 0).toFixed(2) };
+      fols.forEach((f) => { fm[f] = (c.folioMontos && c.folioMontos[f] != null) ? c.folioMontos[f] : (esFolioBono(f) ? BONO_DOMINICAL_MONTO : COMISION_POR_CONTRATO); });
+      return { folios: fols, folioMontos: fm, ..._contarBono(fols, fm), monto: +Object.values(fm).reduce((s, v) => s + (v || 0), 0).toFixed(2) };
     };
     // Cada folio pagado pertenece al último registro que lo incluye; los registros se
     // agrupan por el mes en que salió el dinero (una tarjeta pagada por mes de pago).
@@ -2684,7 +2751,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       // Hoja 3: Comisiones
       if (comisionesItems.length > 0) {
         const cRows = [
-          ["Empleado", "Mes ganado", "Fecha a pagar", "Contratos", "Folios", "Monto comisión", "Estado", "Fecha pagada"],
+          ["Empleado", "Mes ganado", "Fecha a pagar", "Contratos", "Folios", "Bono dominical", "Monto comisión", "Estado", "Fecha pagada"],
         ];
         const mN = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
         comisionesItems.forEach((c) => {
@@ -2695,14 +2762,15 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
             `${mN[parseInt(m)-1]} ${y}`,
             `15 de ${mN[parseInt(mp)-1]} ${yp}`,
             c.count,
-            (c.folios || []).join(", "),
+            (c.folios || []).filter((f) => !esFolioBono(f)).join(", "),
+            c.bonoMonto || 0,
             c.monto,
             c._pagado ? "Pagado" : "Pendiente",
             c._pagado ? (c._pagado.fecha || "") : ""
           ]);
         });
         const ws3 = XLSX.utils.aoa_to_sheet(cRows);
-        ws3["!cols"] = [20, 14, 18, 10, 40, 14, 12, 12].map((w) => ({ wch: w }));
+        ws3["!cols"] = [20, 14, 18, 10, 40, 14, 14, 12, 12].map((w) => ({ wch: w }));
         XLSX.utils.book_append_sheet(wb, ws3, "Comisiones");
       }
       XLSX.writeFile(wb, `LibroContable_${mes}.xlsx`);
@@ -2882,7 +2950,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       if (!confirm("\xBFDesactivar este gasto fijo completo?")) return;
       desactivar(fe.id);
     }
-  } }, "\u{1F5D1}")))), comisionesFiltradas.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--tx2)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 8, display: "flex", alignItems: "center", gap: 8 } }, "\u{1F4BC} Comisiones de empleados", /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 400, color: "var(--tx3)", fontSize: 11 } }, "(— se liquidan el 15 del mes siguiente)")), comisionesFiltradas.map((c) => { const mN = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]; const [y,m] = c.mesGanado.split("-"); const [yp,mp] = c.mesPago.split("-"); return /* @__PURE__ */ React.createElement("div", { key: c.usuario+c.mesGanado+(c._pagado ? "-pag-"+c.mesPago : "-pend"), className: "exp-item", style: { borderColor: c._pagado ? "rgba(16,201,138,.4)" : "var(--br)", borderStyle: "dashed" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, c.nombreUsuario), c._pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente"), /* @__PURE__ */ React.createElement("span", { className: "badge b-gy", style: { fontSize: 10 } }, "Comisi\xF3n")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4C5} Contratos de ", mN[parseInt(m)-1], " ", y), /* @__PURE__ */ React.createElement("span", null, "\u{1F4C4} ", c.count, " contrato", c.count!==1?"s":""), c._pagado ? /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F5D3}\uFE0F Pagado el ", fmtD(c._pagado.fecha)) : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F5D3}\uFE0F Pagar el 15 de ", mN[parseInt(mp)-1], " ", yp))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700 } }, fmt$(c.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, "comisi\xF3n"))));})), gastosFijos.filter((fe) => !fe.active).length > 0 && /* @__PURE__ */ React.createElement("details", { style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("summary", { style: { cursor: "pointer", color: "var(--tx2)", fontSize: 12, padding: "6px 0" } }, "Gastos desactivados (", gastosFijos.filter((fe) => !fe.active).length, ")"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, gastosFijos.filter((fe) => !fe.active).map((fe) => /* @__PURE__ */ React.createElement("div", { key: fe.id, style: { background: "var(--s1)", border: "1px solid var(--br)", borderRadius: 8, padding: "10px 14px", marginBottom: 8, opacity: 0.5, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 500 } }, fe.desc), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { className: "mono", style: { fontSize: 13 } }, fmt$(fe.monto)), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => reactivar(fe.id) }, "Reactivar")))))), (() => {
+  } }, "\u{1F5D1}")))), comisionesFiltradas.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--tx2)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 8, display: "flex", alignItems: "center", gap: 8 } }, "\u{1F4BC} Comisiones de empleados", /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 400, color: "var(--tx3)", fontSize: 11 } }, "(— se liquidan el 15 del mes siguiente)")), comisionesFiltradas.map((c) => { const mN = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]; const [y,m] = c.mesGanado.split("-"); const [yp,mp] = c.mesPago.split("-"); return /* @__PURE__ */ React.createElement("div", { key: c.usuario+c.mesGanado+(c._pagado ? "-pag-"+c.mesPago : "-pend"), className: "exp-item", style: { borderColor: c._pagado ? "rgba(16,201,138,.4)" : "var(--br)", borderStyle: "dashed" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, c.nombreUsuario), c._pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente"), /* @__PURE__ */ React.createElement("span", { className: "badge b-gy", style: { fontSize: 10 } }, "Comisi\xF3n")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4C5} Contratos de ", mN[parseInt(m)-1], " ", y), /* @__PURE__ */ React.createElement("span", null, "\u{1F4C4} ", etiquetaComision(c)), c._pagado ? /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F5D3}\uFE0F Pagado el ", fmtD(c._pagado.fecha)) : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F5D3}\uFE0F Pagar el 15 de ", mN[parseInt(mp)-1], " ", yp))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 18, fontWeight: 700 } }, fmt$(c.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)" } }, "comisi\xF3n"))));})), gastosFijos.filter((fe) => !fe.active).length > 0 && /* @__PURE__ */ React.createElement("details", { style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("summary", { style: { cursor: "pointer", color: "var(--tx2)", fontSize: 12, padding: "6px 0" } }, "Gastos desactivados (", gastosFijos.filter((fe) => !fe.active).length, ")"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, gastosFijos.filter((fe) => !fe.active).map((fe) => /* @__PURE__ */ React.createElement("div", { key: fe.id, style: { background: "var(--s1)", border: "1px solid var(--br)", borderRadius: 8, padding: "10px 14px", marginBottom: 8, opacity: 0.5, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 500 } }, fe.desc), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { className: "mono", style: { fontSize: 13 } }, fmt$(fe.monto)), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => reactivar(fe.id) }, "Reactivar")))))), (() => {
     // Los pagos a instructores son gastos como cualquier otro: se listan aquí junto con
     // los extraordinarios para que el mes cuadre sin tener que ir a la pestaña Comisiones.
     // ── TODOS LOS GASTOS PAGADOS DEL MES ──────────────────────────────────────
@@ -2895,7 +2963,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
     const pendientes = [];
     conEstadoMesActual.filter((e) => !e.paid).forEach((e) => pendientes.push({ k: "f_" + e.id + "_" + e._fecha, desc: e.desc, cat: e.cat, fecha: e._fecha, monto: e.monto, tipo: "fijo" }));
     conEstado.filter((e) => e._mesAnterior && !e.paid).forEach((e) => pendientes.push({ k: "v_" + e.id + "_" + e._fecha, desc: e.desc, cat: e.cat, fecha: e._fecha, monto: e.monto, tipo: "vencido" }));
-    comisionesItems.filter((c) => !c._pagado).forEach((c) => pendientes.push({ k: "c_" + c.usuario + "_" + c.mesGanado, desc: "Comisi\xF3n " + (c.nombreUsuario || c.usuario) + " \u2014 " + c.count + " contrato" + (c.count !== 1 ? "s" : ""), cat: "Comisiones", fecha: c.mesPago ? c.mesPago + "-15" : "", monto: c.monto, tipo: "comision" }));
+    comisionesItems.filter((c) => !c._pagado).forEach((c) => pendientes.push({ k: "c_" + c.usuario + "_" + c.mesGanado, desc: "Comisi\xF3n " + (c.nombreUsuario || c.usuario) + " \u2014 " + etiquetaComision(c), cat: "Comisiones", fecha: c.mesPago ? c.mesPago + "-15" : "", monto: c.monto, tipo: "comision" }));
     instrPorPagar(crmData, pagosGastos2, _mesVencInstr)
       .map((r) => ({ r, s: saldoInstr(pagosGastos2 || [], r, r.mes) }))
       .filter(({ s }) => s.resta > 0)
@@ -3102,7 +3170,7 @@ function ModalConfirmarComision({ comision, onSave, onClose }) {
     const n = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
     return `${n[parseInt(m) - 1]} ${y}`;
   };
-  return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u2705 Confirmar Pago de Comisi\xF3n"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, comision.nombreUsuario), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } }, comision.count, " contrato", comision.count !== 1 ? "s" : "", " creado", comision.count !== 1 ? "s" : "", " en ", mesLabel(comision.mesGanado)), /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 22, fontWeight: 800, marginTop: 8, color: "var(--gr)" } }, fmt$(comision.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Folios: ", comision.folios.join(", "))), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago (liquidaci\xF3n)"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 8 } }, "Este monto se registrar\xE1 como gasto en ", /* @__PURE__ */ React.createElement("strong", null, mesLabel(comision.mesPago)), " (mes en que sale el dinero de la cuenta)."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g", disabled: enviando || !fecha, onClick: () => { if (enviando || !fecha) return; setEnviando(true); onSave(fecha); } }, "\u2713 Confirmar Pago"))));
+  return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u2705 Confirmar Pago de Comisi\xF3n"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s2)", borderRadius: 8, padding: "12px 14px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, comision.nombreUsuario), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--tx2)", marginTop: 3 } }, etiquetaComision(comision), " \u2014 ", mesLabel(comision.mesGanado)), comision.bonoDias > 0 && React.createElement("div", { style: { fontSize: 12, color: "#f59e0b", marginTop: 3, fontWeight: 700 } }, "\u2600\uFE0F Incluye Bono dominical: ", fmt$(comision.bonoMonto)), /* @__PURE__ */ React.createElement("div", { className: "mono", style: { fontSize: 22, fontWeight: 800, marginTop: 8, color: "var(--gr)" } }, fmt$(comision.monto)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Folios: ", comision.folios.filter((f) => !esFolioBono(f)).join(", ") || "\u2014")), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de pago (liquidaci\xF3n)"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: fecha, onChange: (e) => setFecha(e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 8 } }, "Este monto se registrar\xE1 como gasto en ", /* @__PURE__ */ React.createElement("strong", null, mesLabel(comision.mesPago)), " (mes en que sale el dinero de la cuenta)."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g", disabled: enviando || !fecha, onClick: () => { if (enviando || !fecha) return; setEnviando(true); onSave(fecha); } }, "\u2713 Confirmar Pago"))));
 }
 // Edición de un pago a instructor ya registrado: fecha, monto y notas, más la opción de
 // deshacerlo. Hacía falta porque un instructor pidió su pago en el mismo mes en que generó
@@ -3571,7 +3639,7 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     const pago = {
       id: uid(),
       gastoId: null,
-      desc: `Comisi\u00F3n ${c.nombreUsuario} \u2014 ${mesLabel(c.mesGanado)} (${c.count} contrato${c.count !== 1 ? "s" : ""})`,
+      desc: `Comisi\u00F3n ${c.nombreUsuario} \u2014 ${mesLabel(c.mesGanado)} (${etiquetaComision(c)})`,
       monto: c.monto,
       fecha,
       date: fecha,
@@ -3638,9 +3706,9 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
     return +_pagosCom(c).reduce((s, p) => s + (parseFloat(p.monto) || 0), 0).toFixed(2);
   }
   function _renderComisionCard(c) {
-    const montosUnicos = /* @__PURE__ */ new Set(Object.values(c.folioMontos || {}).map((v) => +v));
+    const montosUnicos = /* @__PURE__ */ new Set(Object.keys(c.folioMontos || {}).filter((f) => !esFolioBono(f)).map((f) => +c.folioMontos[f]));
     const montoUniforme = montosUnicos.size <= 1;
-    return /* @__PURE__ */ React.createElement("div", { key: c.usuario + c.mesGanado + (c.pagado ? "-pag-" + c.mesPago : "-pend"), className: "exp-item", style: { borderColor: c.pagado ? "rgba(16,201,138,.4)" : "var(--br)" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, c.nombreUsuario), c.pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4C5} Contratos de ", mesLabel(c.mesGanado)), /* @__PURE__ */ React.createElement("span", null, "\u{1F4C4} ", c.count, " contrato", c.count !== 1 ? "s" : ""), montoUniforme ? /* @__PURE__ */ React.createElement("span", null, "\u{1F4B5} ", fmt$([...montosUnicos][0] != null ? [...montosUnicos][0] : COMISION_POR_CONTRATO), " c/u") : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F4B5} montos variables (editados)"), c.foliosReto && Object.keys(c.foliosReto).length > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F3AF} ", Object.keys(c.foliosReto).length, " con reto"), c.pagado ? /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F4B5} Abonado ", disp(_abonadoCom(c)), " de ", disp(c.monto)) : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F5D3}\uFE0F Pagar el 15 de ", mesLabel(c.mesPago))),
+    return /* @__PURE__ */ React.createElement("div", { key: c.usuario + c.mesGanado + (c.pagado ? "-pag-" + c.mesPago : "-pend"), className: "exp-item", style: { borderColor: c.pagado ? "rgba(16,201,138,.4)" : "var(--br)" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 180 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 15 } }, c.nombreUsuario), c.pagado ? /* @__PURE__ */ React.createElement("span", { className: "badge b-gr" }, "\u2713 Pagado") : /* @__PURE__ */ React.createElement("span", { className: "badge b-am" }, "\u23F3 Pendiente")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4C5} ", (c.count > 0 || !(c.bonoDias > 0)) ? "Contratos de " : "", mesLabel(c.mesGanado)), (c.count > 0 || !(c.bonoDias > 0)) && /* @__PURE__ */ React.createElement("span", null, "\u{1F4C4} ", c.count, " contrato", c.count !== 1 ? "s" : ""), (c.count > 0 || !(c.bonoDias > 0)) && (montoUniforme ? /* @__PURE__ */ React.createElement("span", null, "\u{1F4B5} ", fmt$([...montosUnicos][0] != null ? [...montosUnicos][0] : COMISION_POR_CONTRATO), " c/u") : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F4B5} montos variables (editados)")), c.bonoDias > 0 && React.createElement("span", { className: "bono-dom-anexo", title: "Anexo: domingos asistidos por el administrador (se edita en el CRM, Modo Dios)", style: { color: "#f59e0b", fontWeight: 700 } }, "\u2600\uFE0F Bono dominical: ", c.bonoDias, " domingo", c.bonoDias !== 1 ? "s" : "", " \xB7 ", fmt$(c.bonoMonto)), c.foliosReto && Object.keys(c.foliosReto).length > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F3AF} ", Object.keys(c.foliosReto).length, " con reto"), c.pagado ? /* @__PURE__ */ React.createElement("span", { style: { color: "var(--gr)" } }, "\u{1F4B5} Abonado ", disp(_abonadoCom(c)), " de ", disp(c.monto)) : /* @__PURE__ */ React.createElement("span", { style: { color: "var(--am)" } }, "\u{1F5D3}\uFE0F Pagar el 15 de ", mesLabel(c.mesPago))),
       c.pagado && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--s1)", borderRadius: 20, height: 6, overflow: "hidden", marginTop: 7, maxWidth: 280 } },
         /* @__PURE__ */ React.createElement("div", { style: { width: Math.min(100, c.monto > 0 ? _abonadoCom(c) / c.monto * 100 : 100) + "%", height: "100%", background: "var(--gr)", transition: "width .3s" } })),
       c.pagado && /* @__PURE__ */ React.createElement("div", { className: "com-pagos", style: { marginTop: 7, display: "flex", flexDirection: "column", gap: 4 } },
@@ -3651,6 +3719,11 @@ function ComisionesEmpleados({ crmData, pagosGastos: pagosGastos2, setPagosGasto
           p.notas && !/^Folios:/.test(p.notas) && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--tx3)" } }, "\xB7 ", p.notas),
           /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Cambiar fecha o deshacer este pago", style: { fontSize: 10, padding: "1px 6px", marginLeft: "auto" }, onClick: () => setEditandoPagoCom({ c, registro: p }) }, "\u270E")))),
       /* @__PURE__ */ React.createElement("details", { style: { marginTop: 6 }, open: c.folios.some((f) => seleccionados[f]) }, /* @__PURE__ */ React.createElement("summary", { style: { cursor: "pointer", fontSize: 10, color: "var(--tx3)" } }, "Ver folios (", c.folios.length, ")"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 4, display: "flex", flexDirection: "column", gap: 4 } }, c.folios.map((f) => {
+    if (esFolioBono(f)) {
+      return React.createElement("div", { key: f, className: "bono-dom-row", style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 11, color: "var(--tx2)", background: "rgba(245,158,11,.10)", border: "1px solid rgba(245,158,11,.35)", borderRadius: 6, padding: "4px 8px", flexWrap: "wrap" } },
+        React.createElement("span", null, "\u2600\uFE0F Bono dominical \u2014 ", fmtFechaBono(fechaDeFolioBono(f)), " \xB7 ", fmt$((c.folioMontos && c.folioMontos[f]) != null ? c.folioMontos[f] : BONO_DOMINICAL_MONTO)),
+        React.createElement("span", { style: { fontSize: 10, color: "var(--tx3)" } }, "Se edita en el CRM (Modo Dios)"));
+    }
     const matF = (crmData.matrículas || []).find((mm) => String(mm.folio) === String(f));
     return /* @__PURE__ */ React.createElement("div", { key: f, style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 11, color: "var(--tx2)", background: seleccionados[f] ? "rgba(124,58,237,.12)" : "var(--s1)", borderRadius: 6, padding: "4px 8px", flexWrap: "wrap", outline: seleccionados[f] ? "1px solid #7c3aed" : "none" } },
       /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, cursor: "pointer" } },
@@ -4573,7 +4646,7 @@ function App() {
     }
     if (p._nomina === "comision") {
       const c = p._ref;
-      const pagoC = { id: uid(), gastoId: null, desc: `Comisi\xF3n ${c.nombreUsuario} \u2014 ${c.count} contrato(s)`, monto: c.monto, fecha: p._fecha, date: p._fecha, mes: p._fecha.slice(0, 7), cat: "Comisiones", notas: "Marcado pagado desde recordatorio", createdAt: (/* @__PURE__ */ new Date()).toISOString(), comisionUsuario: c.usuario, comisionMesGanado: c.mesGanado, comisionFolios: c.folios, comisionFolioMontos: { ...c.folioMontos } };
+      const pagoC = { id: uid(), gastoId: null, desc: `Comisi\xF3n ${c.nombreUsuario} \u2014 ${etiquetaComision(c)}`, monto: c.monto, fecha: p._fecha, date: p._fecha, mes: p._fecha.slice(0, 7), cat: "Comisiones", notas: "Marcado pagado desde recordatorio", createdAt: (/* @__PURE__ */ new Date()).toISOString(), comisionUsuario: c.usuario, comisionMesGanado: c.mesGanado, comisionFolios: c.folios, comisionFolioMontos: { ...c.folioMontos } };
       const updC = [...pagosGastos2, pagoC];
       setPagosGastos2(updC);
       await stor("set", "pagosGastos", updC);
@@ -4650,7 +4723,7 @@ function App() {
         aplicarOverridesComisiones(calcComisiones(crmData), comisionOverrides, (crmData == null ? void 0 : crmData.usuarios) || [], pagosGastos2, crmData, retos)
           .filter((c) => c.mesPago === cmNow && c.monto > 0 && !pagosGastos2.some((p) => p.cat === "Comisiones" && p.comisionUsuario === c.usuario && p.comisionMesGanado === c.mesGanado))
           .forEach((c) => {
-            out.push({ id: "comi-" + c.usuario + "-" + c.mesGanado, desc: "\u{1F4BC} Comisi\xF3n " + c.nombreUsuario + " \u2014 " + c.count + " contrato" + (c.count !== 1 ? "s" : "") + " de " + mesLabelGlobal(c.mesGanado), cat: "Comisiones", monto: c.monto, frecuencia: "mensual", dia: DIA_PAGO_COMISIONES, diaMes: DIA_PAGO_COMISIONES, _fecha: fecha15, _nomina: "comision", _ref: c, _mesRef: c.mesGanado, daysUntilDue: diff15, isOverdue: diff15 < 0, isDueSoon: diff15 >= 0 && diff15 <= 7 });
+            out.push({ id: "comi-" + c.usuario + "-" + c.mesGanado, desc: "\u{1F4BC} Comisi\xF3n " + c.nombreUsuario + " \u2014 " + etiquetaComision(c) + " de " + mesLabelGlobal(c.mesGanado), cat: "Comisiones", monto: c.monto, frecuencia: "mensual", dia: DIA_PAGO_COMISIONES, diaMes: DIA_PAGO_COMISIONES, _fecha: fecha15, _nomina: "comision", _ref: c, _mesRef: c.mesGanado, daysUntilDue: diff15, isOverdue: diff15 < 0, isDueSoon: diff15 >= 0 && diff15 <= 7 });
           });
       } catch (e) { console.error("upcoming comisiones:", e); }
     }
@@ -5014,7 +5087,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.05-3"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.05-4"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -5050,7 +5123,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.10.05-3\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.10.05-4\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

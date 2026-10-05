@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.10.01-2\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.10.05-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.01-2\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.05-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -197,7 +197,7 @@ const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.10.01-2";
+const BUILD_VERSION = "BUILD v2026.10.05-1";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -665,8 +665,62 @@ function ocurrenciasGasto(fe, ym) {
 // (y de todos los meses que el filtro llegara a recorrer), inflando los pendientes.
 function ocurrenciaVigente(fe, fechaISO) {
   const desde = fe.vigenteDesde || (fe.createdAt ? String(fe.createdAt).slice(0, 10) : null);
-  if (!desde) return true;
-  return fechaISO >= desde;
+  if (desde && fechaISO < desde) return false;
+  // Plan con total o mes puesto en $0: esa ocurrencia no se paga.
+  if (montoOcurrencia(fe, fechaISO) <= 0) return false;
+  return true;
+}
+// ── MONTO POR OCURRENCIA ────────────────────────────────────────────────────
+// Un gasto fijo puede tener un TOTAL a pagar (montoTotal) y montos distintos por mes
+// (montosMes: { "AAAA-MM": monto }, o { "AAAA-MM-DD": monto } si es semanal). Sin total,
+// se paga indefinidamente el monto del mes (o el base). Con total, se reparte mes a mes
+// hasta cubrirlo; el último pago se ajusta a lo que reste.
+const _planCacheGF = new WeakMap();
+function claveMesGF(fe, fecha) {
+  return (fe.frecuencia || "mensual") === "semanal" ? fecha : String(fecha).slice(0, 7);
+}
+function desdeGF(fe) {
+  return fe.vigenteDesde || (fe.createdAt ? String(fe.createdAt).slice(0, 10) : null);
+}
+function montoBaseOcGF(fe, fecha) {
+  const mm = fe.montosMes || {};
+  const v = mm[claveMesGF(fe, fecha)];
+  if (v !== void 0 && v !== null && v !== "" && !isNaN(parseFloat(v))) return Math.max(0, parseFloat(v));
+  return parseFloat(fe.monto) || 0;
+}
+function planGastoFijo(fe) {
+  if (!fe || !(parseFloat(fe.montoTotal) > 0)) return null;
+  const hit = _planCacheGF.get(fe);
+  if (hit) return hit;
+  const total = +parseFloat(fe.montoTotal).toFixed(2);
+  const desde = desdeGF(fe);
+  const skipped = new Set(fe.skippedDates || []);
+  let ym = desde ? desde.slice(0, 7) : monthStr();
+  const map = {}, lista = [];
+  let acum = 0, guard = 0;
+  while (acum < total - 5e-3 && guard < 600) {
+    guard++;
+    ocurrenciasGasto(fe, ym).forEach((fecha) => {
+      if (acum >= total - 5e-3) return;
+      if (desde && fecha < desde) return;
+      if (skipped.has(fecha)) return;
+      let m = montoBaseOcGF(fe, fecha);
+      if (!(m > 0)) return;
+      m = Math.min(m, +(total - acum).toFixed(2));
+      acum = +(acum + m).toFixed(2);
+      map[fecha] = m;
+      lista.push({ fecha, monto: m, acum });
+    });
+    ym = nextMonth(ym);
+  }
+  const res = { total, map, lista, asignado: acum, completo: acum >= total - 5e-3, fin: lista.length ? lista[lista.length - 1].fecha : null };
+  _planCacheGF.set(fe, res);
+  return res;
+}
+function montoOcurrencia(fe, fecha) {
+  const p = planGastoFijo(fe);
+  if (p) return p.map[fecha] || 0;
+  return montoBaseOcGF(fe, fecha);
 }
 function pagoDeOcurrencia(fe, fechaISO, pagosGastos2) {
   if ((fe.frecuencia || "mensual") === "semanal") {
@@ -1248,7 +1302,8 @@ function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
   const [showCat, setShowCat] = useState(false);
   function guardar() {
     if (!f.desc || !f.monto) return;
-    onSave({ id: (initial == null ? void 0 : initial.id) || uid(), ...f, monto: parseFloat(f.monto), dia: parseInt(f.dia) || 1, diaSemana: parseInt(f.diaSemana) || 0, frecuencia: f.frecuencia || "mensual", active: (initial == null ? void 0 : initial.active) !== void 0 ? initial.active : true, createdAt: (initial == null ? void 0 : initial.createdAt) || (/* @__PURE__ */ new Date()).toISOString() });
+    const _mt = parseFloat(f.montoTotal);
+    onSave({ id: (initial == null ? void 0 : initial.id) || uid(), ...f, montoTotal: _mt > 0 ? +_mt.toFixed(2) : null, vigenteDesde: f.vigenteDesde || null, monto: parseFloat(f.monto), dia: parseInt(f.dia) || 1, diaSemana: parseInt(f.diaSemana) || 0, frecuencia: f.frecuencia || "mensual", active: (initial == null ? void 0 : initial.active) !== void 0 ? initial.active : true, createdAt: (initial == null ? void 0 : initial.createdAt) || (/* @__PURE__ */ new Date()).toISOString() });
   }
   function addCat() {
     if (newCat.trim()) {
@@ -1258,7 +1313,7 @@ function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
     }
   }
   const RS = "display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px;padding:10px 13px;border:2px solid var(--br);border-radius:8px;cursor:pointer;font-size:13px;width:100%;boxSizing:border-box;background:var(--s2)";
-  return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 520 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, initial ? "\u270F\uFE0F Editar Gasto Fijo" : "\u{1F4CB} Nuevo Gasto Fijo"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Descripci\xF3n *"), /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "Ej: Renta del local", value: f.desc, onChange: (e) => set("desc", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Monto *"), /* @__PURE__ */ React.createElement("input", { className: "finp mono", type: "number", min: "0", step: "0.01", placeholder: "0.00", value: f.monto, onChange: (e) => set("monto", e.target.value) }), /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, cursor: "pointer", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!f.enDolares, onChange: (e) => set("enDolares", e.target.checked) }), "\u{1F4B5} El monto est\xE1 en USD (se convierte a MXN autom\xE1ticamente)")), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Frecuencia de pago"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: f.frecuencia !== "semanal" ? "grid" : "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 10, padding: "10px 13px", border: `2px solid var(--br)`, borderRadius: 8, cursor: "pointer", fontSize: 13, background: "var(--s2)" } }, /* @__PURE__ */ React.createElement("div", null, "\u{1F4C5} Mensual \u2014 el mismo d\xEDa cada mes"), /* @__PURE__ */ React.createElement("input", { type: "radio", name: "gf-frecuencia", checked: (f.frecuencia || "mensual") === "mensual", onChange: () => set("frecuencia", "mensual"), style: { width: 16, height: 16, flexShrink: 0 } })), (f.frecuencia || "mensual") === "mensual" && /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { marginLeft: 8 } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "D\xEDa de Pago (1-31)"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "number", min: "1", max: "31", value: f.dia, onChange: (e) => set("dia", e.target.value) })), /* @__PURE__ */ React.createElement("label", { style: { display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 10, padding: "10px 13px", border: `2px solid var(--br)`, borderRadius: 8, cursor: "pointer", fontSize: 13, background: "var(--s2)" } }, /* @__PURE__ */ React.createElement("div", null, "\u{1F501} Semanal \u2014 cada determinado d\xEDa de la semana, como pago independiente"), /* @__PURE__ */ React.createElement("input", { type: "radio", name: "gf-frecuencia", checked: f.frecuencia === "semanal", onChange: () => set("frecuencia", "semanal"), style: { width: 16, height: 16, flexShrink: 0 } })), f.frecuencia === "semanal" && /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { marginLeft: 8 } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Cada"), /* @__PURE__ */ React.createElement("select", { className: "finp", value: (_a = f.diaSemana) != null ? _a : 1, onChange: (e) => set("diaSemana", e.target.value) }, DIAS_SEMANA.map((d, i) => /* @__PURE__ */ React.createElement("option", { key: i, value: i }, d))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Cada ", DIAS_SEMANA[(_b = f.diaSemana) != null ? _b : 1].toLowerCase(), " aparecer\xE1 como un pago propio en Gastos Fijos.")))), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Categor\xEDa"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, /* @__PURE__ */ React.createElement("select", { className: "finp", style: { flex: 1 }, value: f.cat, onChange: (e) => set("cat", e.target.value) }, cats.map((c) => /* @__PURE__ */ React.createElement("option", { key: c }, c))), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Nueva categor\xEDa", onClick: () => setShowCat(!showCat) }, "\uFF0B")), showCat && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 6 } }, /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "Nombre de la nueva categor\xEDa", value: newCat, onChange: (e) => setNewCat(e.target.value), onKeyDown: (e) => e.key === "Enter" && addCat() }), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: addCat }, "Agregar"))), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Notas"), /* @__PURE__ */ React.createElement("textarea", { className: "finp", placeholder: "Proveedor, referencia...", value: f.notas, onChange: (e) => set("notas", e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: guardar, disabled: !f.desc || !f.monto }, "\u2713 ", initial ? "Guardar cambios" : "Agregar"))));
+  return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 520 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, initial ? "\u270F\uFE0F Editar Gasto Fijo" : "\u{1F4CB} Nuevo Gasto Fijo"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Descripci\xF3n *"), /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "Ej: Renta del local", value: f.desc, onChange: (e) => set("desc", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Monto *"), /* @__PURE__ */ React.createElement("input", { className: "finp mono", type: "number", min: "0", step: "0.01", placeholder: "0.00", value: f.monto, onChange: (e) => set("monto", e.target.value) }), /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, cursor: "pointer", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!f.enDolares, onChange: (e) => set("enDolares", e.target.checked) }), "\u{1F4B5} El monto est\xE1 en USD (se convierte a MXN autom\xE1ticamente)")), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Frecuencia de pago"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: f.frecuencia !== "semanal" ? "grid" : "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 10, padding: "10px 13px", border: `2px solid var(--br)`, borderRadius: 8, cursor: "pointer", fontSize: 13, background: "var(--s2)" } }, /* @__PURE__ */ React.createElement("div", null, "\u{1F4C5} Mensual \u2014 el mismo d\xEDa cada mes"), /* @__PURE__ */ React.createElement("input", { type: "radio", name: "gf-frecuencia", checked: (f.frecuencia || "mensual") === "mensual", onChange: () => set("frecuencia", "mensual"), style: { width: 16, height: 16, flexShrink: 0 } })), (f.frecuencia || "mensual") === "mensual" && /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { marginLeft: 8 } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "D\xEDa de Pago (1-31)"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "number", min: "1", max: "31", value: f.dia, onChange: (e) => set("dia", e.target.value) })), /* @__PURE__ */ React.createElement("label", { style: { display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 10, padding: "10px 13px", border: `2px solid var(--br)`, borderRadius: 8, cursor: "pointer", fontSize: 13, background: "var(--s2)" } }, /* @__PURE__ */ React.createElement("div", null, "\u{1F501} Semanal \u2014 cada determinado d\xEDa de la semana, como pago independiente"), /* @__PURE__ */ React.createElement("input", { type: "radio", name: "gf-frecuencia", checked: f.frecuencia === "semanal", onChange: () => set("frecuencia", "semanal"), style: { width: 16, height: 16, flexShrink: 0 } })), f.frecuencia === "semanal" && /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { marginLeft: 8 } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Cada"), /* @__PURE__ */ React.createElement("select", { className: "finp", value: (_a = f.diaSemana) != null ? _a : 1, onChange: (e) => set("diaSemana", e.target.value) }, DIAS_SEMANA.map((d, i) => /* @__PURE__ */ React.createElement("option", { key: i, value: i }, d))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Cada ", DIAS_SEMANA[(_b = f.diaSemana) != null ? _b : 1].toLowerCase(), " aparecer\xE1 como un pago propio en Gastos Fijos.")))), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Categor\xEDa"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, /* @__PURE__ */ React.createElement("select", { className: "finp", style: { flex: 1 }, value: f.cat, onChange: (e) => set("cat", e.target.value) }, cats.map((c) => /* @__PURE__ */ React.createElement("option", { key: c }, c))), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Nueva categor\xEDa", onClick: () => setShowCat(!showCat) }, "\uFF0B")), showCat && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 6 } }, /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "Nombre de la nueva categor\xEDa", value: newCat, onChange: (e) => setNewCat(e.target.value), onKeyDown: (e) => e.key === "Enter" && addCat() }), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: addCat }, "Agregar"))), React.createElement("div", { className: "fgrp" }, React.createElement("label", { className: "flbl" }, "Fecha de inicio"), React.createElement("input", { className: "finp", type: "date", value: f.vigenteDesde || "", onChange: (e) => set("vigenteDesde", e.target.value) }), React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Desde cu\xE1ndo se empieza a pagar. Vac\xEDo = desde hoy.")), React.createElement("div", { className: "fgrp" }, React.createElement("label", { className: "flbl" }, "Total a pagar (opcional)"), React.createElement("input", { className: "finp mono", type: "number", min: "0", step: "0.01", placeholder: "Sin l\xEDmite", value: f.montoTotal == null ? "" : f.montoTotal, onChange: (e) => set("montoTotal", e.target.value) }), React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Se paga el monto de cada periodo hasta cubrir este total.")), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Notas"), /* @__PURE__ */ React.createElement("textarea", { className: "finp", placeholder: "Proveedor, referencia...", value: f.notas, onChange: (e) => set("notas", e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: guardar, disabled: !f.desc || !f.monto }, "\u2713 ", initial ? "Guardar cambios" : "Agregar"))));
 }
 function ModalPagarGasto({ gasto, onSave, onClose }) {
   const [f, setF] = useState({ fecha: gasto._fecha || todayStr(), monto: gasto.monto.toString(), desc: gasto.desc || "", notas: "" });
@@ -1373,7 +1428,7 @@ function Dashboard({ ingresos, gastosFijos, pagosGastos: pagosGastos2, upcoming,
   const pendAmt = gastosRealesMes != null ? gastosRealesMes : gastosFijos.filter((fe) => fe.active).reduce((s, fe) => {
     const skippedPend = new Set(fe.skippedDates || []);
     const pend = ocurrenciasGasto(fe, monthStr()).filter((fecha) => !skippedPend.has(fecha) && ocurrenciaVigente(fe, fecha) && !pagoDeOcurrencia(fe, fecha, pagosGastos2));
-    return s + pend.length * fe.monto;
+    return s + pend.reduce((a, fecha) => a + montoOcurrencia(fe, fecha), 0);
   }, 0);
   const chartData = useMemo(() => {
     return Array.from({ length: 6 }, (_, i) => {
@@ -2479,6 +2534,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
   const [pagando, setPagando] = useState(null);
   const [filtroG, setFiltroG] = useState("todos");
   const [showExtraord, setShowExtraord] = useState(false);
+  const [showLista, setShowLista] = useState(false);
   const [mesVerG, setMesVerG] = useState("actual"); // 'actual' = vencidos/por pagar (como antes) | 'AAAA-MM' = ver ese mes completo (pagados y no)
   const cm = monthStr();
   const cmLabel = (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { month: "long", year: "numeric" });
@@ -2511,7 +2567,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
           // Incluir: mes actual siempre, meses anteriores solo si vencidos y sin pagar
           if (mesR !== cm && (paid || diff >= 0)) return;
           vistasKey.add(fe.id + "|" + fecha);
-          out.push({ ...fe, _fecha: fecha, paid, isOverdue: !paid && diff < 0, isDueSoon: !paid && diff >= 0 && diff <= 7, daysLeft: diff });
+          out.push({ ...fe, monto: montoOcurrencia(fe, fecha), _fecha: fecha, paid, isOverdue: !paid && diff < 0, isDueSoon: !paid && diff >= 0 && diff <= 7, daysLeft: diff });
         });
       });
     });
@@ -2533,7 +2589,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
       ocurrenciasGasto(fe, mesVerG).filter((fecha) => ocurrenciaVigente(fe, fecha)).forEach((fecha) => {
         if (skipped.has(fecha)) return;
         const paid = pagoDeOcurrencia(fe, fecha, pagosGastos2);
-        out.push({ ...fe, _fecha: fecha, paid, isOverdue: false, isDueSoon: false });
+        out.push({ ...fe, monto: montoOcurrencia(fe, fecha), _fecha: fecha, paid, isOverdue: false, isDueSoon: false });
       });
     });
     return out.sort((a, b) => a._fecha.localeCompare(b._fecha));
@@ -2725,6 +2781,11 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
     setGastosFijos(upd);
     await stor("set", "gastosFijos", upd);
   }
+  async function actualizarGastoFijo(id, cambios) {
+    const upd = gastosFijos.map((fe) => fe.id === id ? { ...fe, ...cambios } : fe);
+    setGastosFijos(upd);
+    await stor("set", "gastosFijos", upd);
+  }
   async function desactivar(id) {
     if (!confirm("\xBFDesactivar este gasto fijo?")) return;
     const upd = gastosFijos.map((fe) => fe.id === id ? { ...fe, active: false } : fe);
@@ -2760,7 +2821,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
   return /* @__PURE__ */ React.createElement("div", null, showExtraord && /* @__PURE__ */ React.createElement(ModalGastoExtraordinario, { expenseCats: cats, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, onClose: () => setShowExtraord(false) }), (showForm || editando) && /* @__PURE__ */ React.createElement(ModalGastoFijo, { expenseCats: cats, initial: editando || void 0, onSave: handleSave, onClose: () => {
     setShowForm(false);
     setEditando(null);
-  } }), pagando && /* @__PURE__ */ React.createElement(ModalPagarGasto, { gasto: pagando, onSave: (d) => pagar(d, pagando), onClose: () => setPagando(null) }), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4CB} Gastos"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: () => setShowExtraord(true) }, "\u26A1 Gasto Extraordinario"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: () => setShowForm(true) }, "+ Agregar Gasto Fijo"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: exportarLibroContable, title: "Exportar libro contable del mes en curso" }, "\u{1F4E5} Exportar mes"))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 } }, [{ l: "\u2713 Pagado en " + mesLabelGlobal(cm), v: disp(totPagado), c: "var(--gr)", tip: "Todo lo que ya sali\xF3 este mes: gastos fijos, extraordinarios, instructores y comisiones." }, { l: "\u23F3 Pendiente por pagar", v: disp(totPend), c: totPend > 0 ? "var(--rd)" : "var(--tx2)", tip: "Gastos fijos del mes sin pagar + vencidos anteriores + comisiones + n\xF3mina de instructores." }, { l: "\u{1F4B0} TOTAL del mes", v: disp(totMesCompleto), c: "var(--tx)", tip: "Pagado + pendiente = lo que costar\xE1 " + mesLabelGlobal(cm) + " completo." }, totVencidoAnterior > 0 && { l: "\u26A0\uFE0F Vencido de meses anteriores", v: disp(totVencidoAnterior), c: "var(--rd)", tip: "Incluido dentro del pendiente." }].filter(Boolean).map(({ l, v, c, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c } }, v)))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" } },
+  } }), pagando && /* @__PURE__ */ React.createElement(ModalPagarGasto, { gasto: pagando, onSave: (d) => pagar(d, pagando), onClose: () => setPagando(null) }), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4CB} Gastos"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: () => setShowExtraord(true) }, "\u26A1 Gasto Extraordinario"), /* @__PURE__ */ React.createElement("button", { className: showLista ? "btn btn-p" : "btn btn-o", onClick: () => setShowLista(!showLista) }, "\u{1F4D1} Lista de gastos fijos"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: () => setShowForm(true) }, "+ Agregar Gasto Fijo"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: exportarLibroContable, title: "Exportar libro contable del mes en curso" }, "\u{1F4E5} Exportar mes"))), showLista && React.createElement(ListaGastosFijos, { gastosFijos, pagosGastos: pagosGastos2, disp, onUpdate: actualizarGastoFijo, onEdit: (g) => setEditando(g), onReactivar: reactivar }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 } }, [{ l: "\u2713 Pagado en " + mesLabelGlobal(cm), v: disp(totPagado), c: "var(--gr)", tip: "Todo lo que ya sali\xF3 este mes: gastos fijos, extraordinarios, instructores y comisiones." }, { l: "\u23F3 Pendiente por pagar", v: disp(totPend), c: totPend > 0 ? "var(--rd)" : "var(--tx2)", tip: "Gastos fijos del mes sin pagar + vencidos anteriores + comisiones + n\xF3mina de instructores." }, { l: "\u{1F4B0} TOTAL del mes", v: disp(totMesCompleto), c: "var(--tx)", tip: "Pagado + pendiente = lo que costar\xE1 " + mesLabelGlobal(cm) + " completo." }, totVencidoAnterior > 0 && { l: "\u26A0\uFE0F Vencido de meses anteriores", v: disp(totVencidoAnterior), c: "var(--rd)", tip: "Incluido dentro del pendiente." }].filter(Boolean).map(({ l, v, c, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c } }, v)))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" } },
     /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--tx2)" } }, mesVerG === "actual" ? "Estado \u2014 " : "Viendo \u2014 "),
     /* @__PURE__ */ React.createElement("select", { value: mesVerG, onChange: (e) => setMesVerG(e.target.value), style: { fontSize: 12, fontWeight: 700, textTransform: "capitalize", background: "var(--s2)", color: "var(--tx)", border: "1px solid var(--br)", borderRadius: 6, padding: "3px 8px" } },
       /* @__PURE__ */ React.createElement("option", { value: "actual" }, "\u{1F4C5} Por pagar (" + cmLabel + ")"),
@@ -2875,6 +2936,122 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
           } }, "\u{1F5D1}"));
       }));
   })());
+}
+
+// ── LISTA COMPLETA DE GASTOS FIJOS ──────────────────────────────────────────
+// Todos los gastos fijos (incluso los que empiezan en meses posteriores), con fecha de
+// inicio editable, total a pagar y monto editable por mes.
+function ListaGastosFijos({ gastosFijos, pagosGastos, disp, onUpdate, onEdit, onReactivar }) {
+  const F = disp || fmt$;
+  const [abierto, setAbierto] = useState(null);
+  const [verInactivos, setVerInactivos] = useState(false);
+  const [totalDraft, setTotalDraft] = useState("");
+  const hoy = todayStr();
+  const pagadoDe = (g) => +(pagosGastos || []).filter((p) => p && p.gastoId === g.id).reduce((s, p) => s + (parseFloat(p.monto) || 0), 0).toFixed(2);
+  const lista = (gastosFijos || []).filter((g) => g && (verInactivos || g.active)).slice().sort((a, b) => {
+    if (!!a.active !== !!b.active) return a.active ? -1 : 1;
+    return String(desdeGF(a) || "").localeCompare(String(desdeGF(b) || ""));
+  });
+  const nInact = (gastosFijos || []).filter((g) => g && !g.active).length;
+  const frecTxt = (g) => (g.frecuencia || "mensual") === "semanal" ? "Semanal \u00B7 " + (DIAS_SEMANA[g.diaSemana] || "") : "Mensual \u00B7 d\u00EDa " + (g.dia || 1);
+  function filasPlan(g) {
+    const plan = planGastoFijo(g);
+    const desde = desdeGF(g) || hoy;
+    const skipped = new Set(g.skippedDates || []);
+    const out = [];
+    let ym = plan ? desde.slice(0, 7) : (desde.slice(0, 7) > monthStr() ? desde.slice(0, 7) : monthStr());
+    const maxMeses = plan ? 600 : 12;
+    let acum = 0;
+    for (let k = 0; k < maxMeses && out.length < 240; k++) {
+      let fin = false;
+      ocurrenciasGasto(g, ym).forEach((fecha) => {
+        if (fin) return;
+        if (fecha < desde || skipped.has(fecha)) return;
+        if (plan && plan.fin && fecha > plan.fin) { fin = true; return; }
+        const m = montoOcurrencia(g, fecha);
+        acum = +(acum + m).toFixed(2);
+        const cl = claveMesGF(g, fecha);
+        const mm = g.montosMes || {};
+        out.push({ fecha, clave: cl, monto: m, acum, editado: mm[cl] !== void 0 && mm[cl] !== null && mm[cl] !== "", pagado: pagoDeOcurrencia(g, fecha, pagosGastos || []) });
+      });
+      if (fin) break;
+      if (plan && plan.completo && plan.fin && ym >= plan.fin.slice(0, 7)) break;
+      if (plan && !plan.completo && out.length >= 60) break;
+      ym = nextMonth(ym);
+    }
+    return out;
+  }
+  function guardarMontoMes(g, clave, valor) {
+    const mm = { ...(g.montosMes || {}) };
+    const v = String(valor).trim();
+    if (v === "") delete mm[clave];
+    else {
+      const n = parseFloat(v);
+      if (isNaN(n) || n < 0) return;
+      if (Math.abs(n - (parseFloat(g.monto) || 0)) < 5e-3) delete mm[clave];
+      else mm[clave] = +n.toFixed(2);
+    }
+    onUpdate(g.id, { montosMes: Object.keys(mm).length ? mm : null });
+  }
+  function guardarTotal(g) {
+    const n = parseFloat(totalDraft);
+    onUpdate(g.id, { montoTotal: n > 0 ? +n.toFixed(2) : null });
+  }
+  const th = { padding: "8px 10px", textAlign: "left", fontSize: 11, color: "var(--tx3)", textTransform: "uppercase", letterSpacing: ".4px", whiteSpace: "nowrap" };
+  const td = { padding: "8px 10px", fontSize: 12, verticalAlign: "middle" };
+  return React.createElement("div", { className: "card lista-gf", style: { marginBottom: 16, padding: 14, background: "var(--s1)", border: "1px solid var(--br)", borderRadius: 10 } },
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14 } }, "\u{1F4D1} Lista completa de gastos fijos ", React.createElement("span", { style: { fontSize: 12, color: "var(--tx3)", fontWeight: 400 } }, "(" + lista.length + ")")),
+      nInact > 0 && React.createElement("label", { style: { fontSize: 12, color: "var(--tx2)", display: "flex", gap: 6, alignItems: "center", cursor: "pointer" } },
+        React.createElement("input", { type: "checkbox", checked: verInactivos, onChange: (e) => setVerInactivos(e.target.checked) }), "Mostrar inactivos (" + nInact + ")")),
+    lista.length === 0 ? React.createElement("div", { style: { color: "var(--tx3)", fontSize: 12, padding: 10, textAlign: "center" } }, "Sin gastos fijos") :
+    React.createElement("div", { className: "twrap", style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
+      React.createElement("thead", null, React.createElement("tr", { style: { borderBottom: "1px solid var(--br)" } },
+        ["Concepto", "Frecuencia", "Inicio", "Monto periodo", "Total a pagar", "Pagado", "Restante", "Termina", "Estado", ""].map((c) => React.createElement("th", { key: c, style: th }, c)))),
+      React.createElement("tbody", null, lista.map((g) => {
+        const plan = planGastoFijo(g);
+        const pagado = pagadoDe(g);
+        const desde = desdeGF(g);
+        const restante = plan ? Math.max(0, +(plan.total - pagado).toFixed(2)) : null;
+        const estado = !g.active ? ["Inactivo", "var(--tx3)"] : (desde && desde > hoy) ? ["Inicia " + fmtD(desde), "var(--am)"] : (plan && restante <= 5e-3) ? ["Liquidado", "var(--gr)"] : (plan && plan.fin && plan.fin < hoy) ? ["Plan terminado", "var(--gr)"] : ["Activo", "var(--ac)"];
+        const open = abierto === g.id;
+        const filas = open ? filasPlan(g) : [];
+        return [
+          React.createElement("tr", { key: g.id, className: "gf-row", style: { borderBottom: open ? "none" : "1px solid var(--br)", opacity: g.active ? 1 : 0.55 } },
+            React.createElement("td", { style: td }, React.createElement("div", { style: { fontWeight: 600 } }, g.desc || ""), React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)" } }, g.cat || "")),
+            React.createElement("td", { style: { ...td, whiteSpace: "nowrap", color: "var(--tx2)" } }, frecTxt(g)),
+            React.createElement("td", { style: td }, React.createElement("input", { type: "date", className: "finp gf-inicio", value: desde || "", style: { padding: "4px 6px", fontSize: 12, minWidth: 130 }, onChange: (e) => { if (e.target.value) onUpdate(g.id, { vigenteDesde: e.target.value }); } })),
+            React.createElement("td", { className: "mono", style: { ...td, whiteSpace: "nowrap" } }, F(parseFloat(g.monto) || 0), g.montosMes && Object.keys(g.montosMes).length > 0 && React.createElement("div", { style: { fontSize: 10, color: "var(--am)" } }, Object.keys(g.montosMes).length + " mes(es) con monto distinto")),
+            React.createElement("td", { className: "mono gf-total", style: { ...td, whiteSpace: "nowrap" } }, plan ? F(plan.total) : React.createElement("span", { style: { color: "var(--tx3)" } }, "Sin l\u00EDmite")),
+            React.createElement("td", { className: "mono gf-pagado", style: { ...td, whiteSpace: "nowrap", color: "var(--gr)" } }, F(pagado)),
+            React.createElement("td", { className: "mono gf-restante", style: { ...td, whiteSpace: "nowrap", color: restante ? "var(--rd)" : "var(--tx3)" } }, plan ? F(restante) : "\u2014"),
+            React.createElement("td", { className: "gf-fin", style: { ...td, whiteSpace: "nowrap" } }, plan ? (plan.completo ? fmtD(plan.fin) : React.createElement("span", { style: { color: "var(--rd)" } }, "No alcanza")) : "\u2014"),
+            React.createElement("td", { style: td }, React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: estado[1], whiteSpace: "nowrap" } }, estado[0])),
+            React.createElement("td", { style: { ...td, whiteSpace: "nowrap", textAlign: "right" } },
+              React.createElement("button", { className: "btn btn-o btn-sm gf-plan-btn", title: "Total a pagar y monto de cada mes", onClick: () => { setAbierto(open ? null : g.id); setTotalDraft(plan ? String(plan.total) : ""); } }, open ? "\u25B2 Plan" : "\u{1F4C5} Plan"), " ",
+              React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar", onClick: () => onEdit(g) }, "\u270F\uFE0F"),
+              !g.active && onReactivar && React.createElement("button", { className: "btn btn-o btn-sm", style: { marginLeft: 4 }, onClick: () => onReactivar(g.id) }, "Reactivar"))),
+          open && React.createElement("tr", { key: g.id + "_plan", style: { borderBottom: "1px solid var(--br)" } }, React.createElement("td", { colSpan: 10, style: { padding: "4px 10px 14px" } },
+            React.createElement("div", { className: "gf-plan", style: { background: "var(--s2)", borderRadius: 8, padding: 12 } },
+              React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 } },
+                React.createElement("span", { style: { fontSize: 12, fontWeight: 700 } }, "Total a pagar:"),
+                React.createElement("input", { className: "finp mono gf-total-inp", type: "number", min: "0", step: "0.01", placeholder: "Sin l\u00EDmite", value: totalDraft, onChange: (e) => setTotalDraft(e.target.value), style: { width: 150, padding: "4px 8px" } }),
+                React.createElement("button", { className: "btn btn-p btn-sm gf-total-save", onClick: () => guardarTotal(g) }, "Guardar total"),
+                plan && React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => { setTotalDraft(""); onUpdate(g.id, { montoTotal: null }); } }, "Quitar total"),
+                React.createElement("span", { style: { fontSize: 11, color: "var(--tx3)" } }, plan ? (filas.length + " pago(s) \u00B7 programado " + F(plan.asignado) + " de " + F(plan.total) + (plan.completo ? "" : " \u2014 con estos montos no se completa")) : "Sin total: se paga indefinidamente. Abajo, los pr\u00F3ximos 12 periodos.")),
+              React.createElement("div", { style: { overflowX: "auto" } }, React.createElement("table", { className: "gf-plan-tabla", style: { width: "100%", borderCollapse: "collapse" } },
+                React.createElement("thead", null, React.createElement("tr", null, ["Periodo", "Monto a pagar", plan ? "Acumulado" : null, plan ? "Resta del total" : null, "Estado"].filter(Boolean).map((c) => React.createElement("th", { key: c, style: th }, c)))),
+                React.createElement("tbody", null, filas.map((r) => React.createElement("tr", { key: r.fecha, className: "gf-plan-fila", "data-fecha": r.fecha, style: { borderTop: "1px solid var(--br)" } },
+                  React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, fmtD(r.fecha)),
+                  React.createElement("td", { style: td }, React.createElement("input", { key: g.id + r.clave + r.monto, className: "finp mono gf-mes-inp", type: "number", min: "0", step: "0.01", defaultValue: r.monto, disabled: !!r.pagado, style: { width: 130, padding: "3px 6px", borderColor: r.editado ? "var(--am)" : void 0 },
+                    onBlur: (e) => { if (String(e.target.value) !== String(r.monto)) guardarMontoMes(g, r.clave, e.target.value); },
+                    onKeyDown: (e) => { if (e.key === "Enter") e.target.blur(); } }),
+                    r.editado && !r.pagado && React.createElement("button", { className: "btn btn-o btn-sm", title: "Volver al monto base", style: { marginLeft: 4 }, onClick: () => guardarMontoMes(g, r.clave, "") }, "\u21BA")),
+                  plan && React.createElement("td", { className: "mono", style: td }, F(r.acum)),
+                  plan && React.createElement("td", { className: "mono", style: td }, F(Math.max(0, +(plan.total - r.acum).toFixed(2)))),
+                  React.createElement("td", { style: { ...td, fontSize: 11, fontWeight: 700, color: r.pagado ? "var(--gr)" : r.monto <= 0 ? "var(--tx3)" : r.fecha < hoy ? "var(--rd)" : "var(--tx2)" } }, r.pagado ? "\u2713 Pagado" : r.monto <= 0 ? "Sin pago" : r.fecha < hoy ? "Vencido" : "Pendiente")))))))))
+        ];
+      })))));
 }
 function ModalEditarPagoComision({ comision, registro, onSave, onDelete, onClose }) {
   const [fecha, setFecha] = useState(registro.fecha || registro.date || todayStr());
@@ -4088,7 +4265,7 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
   const gastosFijosMes = (ym) => gastosFijos.filter((g) => g.active).reduce((s, g) => {
     const skipped = new Set(g.skippedDates || []);
     const ocs = ocurrenciasGasto(g, ym).filter((fecha) => !skipped.has(fecha) && ocurrenciaVigente(g, fecha));
-    return s + ocs.length * g.monto;
+    return s + ocs.reduce((a, fecha) => a + montoOcurrencia(g, fecha), 0);
   }, 0);
   const timeline = useMemo(() => meses.map((ym) => ({
     ym,
@@ -4128,7 +4305,7 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
     if (det === "activos") return React.createElement(FichaDetalle, { titulo: "\u{1F465} Alumnos activos hoy", cols: ["Folio", "Alumno", "Curso"], rows: alumnosActivosEnMes(cm, mats, cursos).map((m2) => ["#" + m2.folio, m2.alumno || "", m2.curso || ""]), total: null, onClose: () => setDet(null) });
     if (det === "proy") { const pcD = ingresoPorCobrar(cm); return React.createElement(FichaDetalle, { titulo: "\u{1F4B0} Por recibir este mes", cols: ["Folio", "Alumno", "Curso", "Costo base", "Ya pagado", "Por recibir"], rows: alumnosActivosEnMes(cm, mats, cursos).map((m2) => { const cu = cursos.find((c) => c.nombre === m2.curso); const cb = cu ? parseFloat(String(cu.costoBase || "").replace(/[^0-9.]/g, "")) || 0 : 0; const pg = +((pcD.porFolio || {})[String(m2.folio)] || 0).toFixed(2); return ["#" + m2.folio, m2.alumno || "", m2.curso || "", F(cb), F(pg), F(Math.max(0, +(cb - pg).toFixed(2)))]; }), total: F(pcD.pendiente) + (pcD.cubierto > 0 ? " (ya pagado " + F(pcD.cubierto) + " \xB7 total esperado " + F(pcD.esperado) + ")" : ""), onClose: () => setDet(null) }); }
     if (det === "real") return React.createElement(FichaDetalle, { titulo: "\u2705 Ya cobrado este mes (neto)", cols: ["Fecha", "Concepto", "Neto"], rows: ingresos.filter((i) => i.date && i.date.startsWith(cm)).map((i) => [String(i.date), i.desc || "", F(i.neto || 0)]), total: F(ingresoReal(cm)), onClose: () => setDet(null) });
-    if (det === "gfijos") return React.createElement(FichaDetalle, { titulo: "\u{1F4B8} Gastos fijos del mes", cols: ["Gasto", "Ocurrencias", "Total"], rows: gastosFijos.filter((g) => g.active).map((g) => { const skipped = new Set(g.skippedDates || []); const ocs = ocurrenciasGasto(g, cm).filter((f2) => !skipped.has(f2) && ocurrenciaVigente(g, f2)); return [g.desc || "", F(g.monto || 0) + " \xD7 " + ocs.length, F((g.monto || 0) * ocs.length)]; }).filter((r) => r[2] !== F(0)), total: F(totalGastos), onClose: () => setDet(null) });
+    if (det === "gfijos") return React.createElement(FichaDetalle, { titulo: "\u{1F4B8} Gastos fijos del mes", cols: ["Gasto", "Ocurrencias", "Total"], rows: gastosFijos.filter((g) => g.active).map((g) => { const skipped = new Set(g.skippedDates || []); const ocs = ocurrenciasGasto(g, cm).filter((f2) => !skipped.has(f2) && ocurrenciaVigente(g, f2)); const tOc = ocs.reduce((a, f2) => a + montoOcurrencia(g, f2), 0); return [g.desc || "", ocs.map((f2) => F(montoOcurrencia(g, f2))).join(" + ") || "0", F(tOc)]; }).filter((r) => r[2] !== F(0)), total: F(totalGastos), onClose: () => setDet(null) });
     return null; })(), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4C8} Pron\xF3stico de Ingresos"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 2 } }, "Proyecci\xF3n basada en alumnos regulares del CRM \xB7 ", mats.length, " matr\xEDculas \xB7 ", cursos.length, " cursos"))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 18 } }, [
     { l: "Contratos activos hoy", v: alumnosActivosEnMes(cm, mats, cursos).length, c: "var(--ac)", k: "activos",
       // Se cuentan FOLIOS, no personas: un alumno inscrito en dos cursos son dos contratos.
@@ -4425,7 +4602,7 @@ function App() {
           if (!ocurrenciaVigente(fe, fecha)) return;
           if (pagoDeOcurrencia(fe, fecha, pagosGastos2)) return;
           const diff = Math.round((/* @__PURE__ */ new Date(fecha + "T00:00:00") - /* @__PURE__ */ new Date(hoyISO + "T00:00:00")) / 864e5);
-          if (diff <= 7) out.push({ ...fe, _fecha: fecha, daysUntilDue: diff, isOverdue: diff < 0, isDueSoon: diff >= 0 && diff <= 7 });
+          if (diff <= 7) out.push({ ...fe, monto: montoOcurrencia(fe, fecha), _fecha: fecha, daysUntilDue: diff, isOverdue: diff < 0, isDueSoon: diff >= 0 && diff <= 7 });
         });
       });
     });
@@ -4470,7 +4647,7 @@ function App() {
     // 1. Gastos fijos del mes (misma fórmula que Pronóstico y GastosFijos)
     const baseFijo = gastosFijos.filter((g) => g.active).reduce((s, g) => {
       const sk = new Set(g.skippedDates || []);
-      return s + ocurrenciasGasto(g, cmNow).filter((f) => !sk.has(f) && ocurrenciaVigente(g, f)).length * g.monto;
+      return s + ocurrenciasGasto(g, cmNow).filter((f) => !sk.has(f) && ocurrenciaVigente(g, f)).reduce((a, f) => a + montoOcurrencia(g, f), 0);
     }, 0);
     // 2. Vencidos de meses anteriores no pagados
     let vencidos = 0;
@@ -4486,7 +4663,7 @@ function App() {
           const diff = Math.round((new Date(fecha + "T00:00:00") - new Date(hoyISO + "T00:00:00")) / 864e5);
           if (diff >= 0) return; // no vencido
           const pagado = pagosGastos2.find((p) => p.gastoId === g.id && (p.mes === fecha.slice(0, 7) || p.fecha === fecha || (p.date && p.date === fecha)));
-          if (!pagado) vencidos += g.monto;
+          if (!pagado) vencidos += montoOcurrencia(g, fecha);
         });
       }
     });
@@ -4815,7 +4992,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.01-2"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.05-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -4851,7 +5028,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.10.01-2\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.10.05-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

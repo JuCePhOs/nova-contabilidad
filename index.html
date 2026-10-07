@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.10.06-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.10.06-2\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.06-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.06-2\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -197,7 +197,7 @@ const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.10.06-1";
+const BUILD_VERSION = "BUILD v2026.10.06-2";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -466,6 +466,32 @@ function contratosActivosCRM(crm, mesRef) {
     if (m.pagoTipo === "unico" && m.fechaISO && m.fechaISO.slice(0, 7) < MES_INICIO_ACADEMIA_CONTA) return false;
     return true;
   });
+}
+// CONTRATOS ACTIVOS = contratos que generan PAGO REGULAR (mensualidad) en el mes.
+// Única definición para toda la app (Alumnos CRM y Pronóstico usan esta misma).
+function contratosRegularesCRM(crm, mesRef) {
+  const ym = mesRef || monthStr();
+  const cursos = ((crm || {}).cursos) || [];
+  const [y, mo] = ym.split("-").map(Number);
+  const mesStart = new Date(y, mo - 1, 1);
+  const mesEnd = new Date(y, mo, 0);
+  return contratosActivosCRM(crm, ym).filter((m) => {
+    if (m.pagoTipo === "unico") return false;
+    const ini = String(m.fechaISO || "").slice(0, 7);
+    if (ini && ini > ym) return false;
+    const cur = cursos.find((c) => c.nombre === m.curso);
+    if (cur) {
+      const fi = cur.fechaInicio ? new Date(cur.fechaInicio + "T00:00:00") : null;
+      const ff = cur.fechaFin ? new Date(cur.fechaFin + "T00:00:00") : null;
+      if (fi && fi > mesEnd) return false;
+      if (ff && ff < mesStart) return false;
+    }
+    return true;
+  }).sort((a, b) => Number(a.folio) - Number(b.folio));
+}
+function mensualidadContrato(crm, m) {
+  const v = parseFloat(m && (m.pagoMensual != null ? m.pagoMensual : m.primerPago));
+  return v > 0 ? v : crmCostoCurso(crm, m && m.curso);
 }
 function matriculasPendientesCRM(crm, mesRef) {
   const mats = (crm == null ? void 0 : crm["matr\xEDculas"]) || [];
@@ -2567,7 +2593,9 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
   const _saldoParcPorFolio = useMemo(() => { const o = {}; _parcMats.forEach((m) => { o[String(m.folio)] = saldosParcialesCRM(crmData, m, cm); }); return o; }, [_parcMats, crmData, cm]);
   const _totParc = _parcMats.reduce((s, m) => s + (_saldoParcPorFolio[String(m.folio)] || []).reduce((a, x) => a + x.restante, 0), 0);
   const becasStats = useMemo(() => statsBecas(crmData), [crmData]);
-  const _contratosActivos = useMemo(() => contratosActivosCRM(crmData, cm).length, [crmData, cm]);
+  const _contratosLista = useMemo(() => contratosRegularesCRM(crmData, cm), [crmData, cm]);
+  const _contratosActivos = _contratosLista.length;
+  const [verContratos, setVerContratos] = useState(false);
   const filtrados = useMemo(
     () => filtradosBase.filter((a) => { if (filtroPago === "todos") return true; const tienePend = (a.folios || []).some((f) => _folPendSet.has(String(f))); return filtroPago === "pendientes" ? tienePend : !tienePend; }).filter((a) => !soloBecados || ((a.becas || []).length > 0)),
     [filtradosBase, filtroPago, _folPendSet, soloBecados]
@@ -2645,14 +2673,31 @@ function AlumnosCRM({ crmData, ingresos, setIngresos }) {
   ].map(({ l, v, c, k, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip, onClick: () => setFiltroPago(filtroPago === k && k !== "todos" ? "todos" : k), style: { cursor: "pointer", outline: k !== "todos" && filtroPago === k ? "2px solid " + c : "none", outlineOffset: 2 } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c, fontSize: 22, fontFamily: "var(--mono)" } }, v)))), pendientes > 0 && /* @__PURE__ */ React.createElement("div", { className: "alert al-rd", style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, "\u26A0\uFE0F"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--tx)" } }, pendientes, " alumno(s) sin pago registrado en ", cmLabel), _parcMats.length > 0 && React.createElement("div", { className: "alm-parcial-alerta", style: { fontSize: 12, fontWeight: 700, color: "var(--am)", marginTop: 2 } }, "\u{1F9FE} Incluye ", _parcMats.length, " con pago parcial \u2014 falta cobrar ", fmt$(_totParc)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, opacity: 0.85, marginTop: 2 } }, 'Usa el bot\xF3n "\u{1F4B0} Registrar pago" para registrar su mensualidad.'))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center", marginBottom: 12 } },
     [["todos", "Todos", tipoStats.todos, "var(--ac)"], ["altas", "\u{1F31F} Alumnos nuevos", tipoStats.altas, "#14b8a6"], ["nuevos", "\u{1F195} Contratos nuevos", tipoStats.nuevos, "#6366f1"], ["regulares", "\u{1F501} Regulares", tipoStats.regulares, "var(--gr)"], ["unicos", "\u{1F4B3} Pago \xFAnico", tipoStats.unicos, "#f59e0b"]].map(([k, l, n, col]) => /* @__PURE__ */ React.createElement("button", { key: k, onClick: () => setFiltroTipo(k), style: { border: "1px solid " + (filtroTipo === k ? col : "var(--br)"), background: filtroTipo === k ? col : "transparent", color: filtroTipo === k ? "#fff" : "var(--tx2)", borderRadius: 20, padding: "5px 13px", fontSize: 12, cursor: "pointer", fontWeight: 600 } }, l, " ", /* @__PURE__ */ React.createElement("span", { style: { opacity: 0.85 } }, n))),
     /* @__PURE__ */ React.createElement("button", { key: "becados", onClick: () => setSoloBecados(!soloBecados), title: "Solo alumnos con al menos una matr\xEDcula becada", style: { border: "1px solid " + (soloBecados ? "#c4a000" : "var(--br)"), background: soloBecados ? "#c4a000" : "transparent", color: soloBecados ? "#fff" : "var(--tx2)", borderRadius: 20, padding: "5px 13px", fontSize: 12, cursor: "pointer", fontWeight: 600 } }, "\u{1F393} Becados ", /* @__PURE__ */ React.createElement("span", { style: { opacity: 0.85 } }, becasStats.otorgadas)),
-    React.createElement("span", { key: "contratosTot", "data-testid": "contratos-total", title: "Contratos activos en el CRM: " + _contratosActivos + " de " + ((((crmData || {})["matr\xEDculas"]) || []).length) + " registrados. Excluye bajas, cancelados/finalizados, pausados este mes y pagos \xFAnicos anteriores a " + MES_INICIO_ACADEMIA_CONTA + ".", style: { border: "1px solid #8b5cf6", background: "rgba(139,92,246,.12)", color: "var(--tx)", borderRadius: 20, padding: "5px 13px", fontSize: 12, fontWeight: 600 } }, "\u{1F4C4} Contratos activos ", React.createElement("span", { style: { opacity: 0.85 } }, _contratosActivos)),
+    React.createElement("button", { key: "contratosTot", "data-testid": "contratos-total", onClick: () => setVerContratos(!verContratos), title: "Contratos con pago regular (mensualidad) en " + cmLabel + ". Clic para ver la lista.", style: { border: "1px solid #8b5cf6", background: verContratos ? "#8b5cf6" : "rgba(139,92,246,.12)", color: verContratos ? "#fff" : "var(--tx)", borderRadius: 20, padding: "5px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer" } }, "\u{1F4C4} Contratos activos ", React.createElement("span", { style: { opacity: 0.85 } }, _contratosActivos)),
     /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "var(--tx3)", marginLeft: 4 } }, "Regulares = mensualidad de meses anteriores")
   ), becasStats.becas > 0 && /* @__PURE__ */ React.createElement(PanelBecas, { stats: becasStats }), /* @__PURE__ */ React.createElement("div", { className: "fbar", style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("input", { className: "finput", type: "text", placeholder: "\u{1F50D} Buscar alumno...", value: q, onChange: (e) => setQ(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement("select", { className: "finput", value: filtroCurso, onChange: (e) => setFiltroCurso(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "todos" }, "Todos los cursos"), cursos.map((c) => /* @__PURE__ */ React.createElement("option", { key: c }, c))), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => {
     setQ("");
     setFiltroCurso("todos");
     setFiltroTipo("todos");
     setSoloBecados(false);
-  } }, "Limpiar")), filtrados.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, /* @__PURE__ */ React.createElement("div", { className: "empty-icon" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { className: "empty-ttl" }, "Sin resultados")) : /* @__PURE__ */ React.createElement("div", { className: "card", style: { padding: 0 } }, filtrados.map((a) => {
+    setVerContratos(false);
+  } }, "Limpiar")), verContratos ? (() => {
+    const qq = (q || "").trim().toLowerCase();
+    const lst = _contratosLista.filter((m) => (!qq || String(m.alumno || "").toLowerCase().includes(qq) || String(m.folio).includes(qq.replace("#", ""))) && (filtroCurso === "todos" || m.curso === filtroCurso));
+    const tot = lst.reduce((s2, m) => s2 + mensualidadContrato(crmData, m), 0);
+    return React.createElement("div", { className: "card contratos-lista", style: { padding: 0 } },
+      React.createElement("div", { style: { padding: "12px 16px", borderBottom: "1px solid var(--br)", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 } },
+        React.createElement("strong", null, "\u{1F4C4} Contratos activos \u2014 " + lst.length),
+        React.createElement("span", { style: { fontSize: 12, color: "var(--tx2)" } }, "Mensualidades: ", React.createElement("strong", { className: "mono", style: { color: "var(--gr)" } }, fmt$(tot)))),
+      React.createElement("div", { className: "twrap" }, React.createElement("table", null,
+        React.createElement("thead", null, React.createElement("tr", null, ["Folio", "Alumno", "Curso", "Alta", "Mensualidad"].map((h) => React.createElement("th", { key: h, className: h === "Mensualidad" ? "tr" : "" }, h)))),
+        React.createElement("tbody", null, lst.map((m) => React.createElement("tr", { key: m.folio, className: "contrato-row" },
+          React.createElement("td", { className: "mono" }, "#" + m.folio),
+          React.createElement("td", null, m.alumno || "\u2014"),
+          React.createElement("td", null, React.createElement("span", { className: "course-tag" }, m.curso || "\u2014")),
+          React.createElement("td", { className: "mono", style: { fontSize: 11 } }, fmtD(String(m.fechaISO || "").slice(0, 10))),
+          React.createElement("td", { className: "mono tr" }, fmt$(mensualidadContrato(crmData, m)))))))));
+  })() : filtrados.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, /* @__PURE__ */ React.createElement("div", { className: "empty-icon" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { className: "empty-ttl" }, "Sin resultados")) : /* @__PURE__ */ React.createElement("div", { className: "card", style: { padding: 0 } }, filtrados.map((a) => {
     const pagado = pagadosMes.has(a.alumno) || !a.tieneMensual;
     const procesados = new Set(ingresos.filter((i) => i.crmFolio).map((i) => String(i.crmFolio)));
     const pagoCRM = ((crmData == null ? void 0 : crmData.pagosRegulares) || []).filter((p) => {
@@ -4486,15 +4531,15 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
   const [det, setDet] = useState(null);
   if (!crmData) return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl", style: { marginBottom: 14 } }, "\u{1F4C8} Pron\xF3stico de Ingresos"), /* @__PURE__ */ React.createElement("div", { className: "crm-off" }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, "\u{1F50C}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, color: "var(--tx)" } }, "CRM no conectado"), /* @__PURE__ */ React.createElement("div", { style: { color: "var(--tx2)" } }, "El pron\xF3stico requiere los datos del CRM (alumnos, cursos y fechas de inicio/fin)."))));
   return /* @__PURE__ */ React.createElement("div", null, det && (() => { const F = fmt$;
-    if (det === "activos") return React.createElement(FichaDetalle, { titulo: "\u{1F465} Alumnos activos hoy", cols: ["Folio", "Alumno", "Curso"], rows: alumnosActivosEnMes(cm, mats, cursos).map((m2) => ["#" + m2.folio, m2.alumno || "", m2.curso || ""]), total: null, onClose: () => setDet(null) });
+    if (det === "activos") return React.createElement(FichaDetalle, { titulo: "\u{1F4C4} Contratos activos hoy", cols: ["Folio", "Alumno", "Curso"], rows: contratosRegularesCRM(crmData, cm).map((m2) => ["#" + m2.folio, m2.alumno || "", m2.curso || ""]), total: null, onClose: () => setDet(null) });
     if (det === "proy") { const pcD = ingresoPorCobrar(cm); return React.createElement(FichaDetalle, { titulo: "\u{1F4B0} Por recibir este mes", cols: ["Folio", "Alumno", "Curso", "Costo base", "Ya pagado", "Por recibir"], rows: alumnosActivosEnMes(cm, mats, cursos).map((m2) => { const cu = cursos.find((c) => c.nombre === m2.curso); const cb = cu ? parseFloat(String(cu.costoBase || "").replace(/[^0-9.]/g, "")) || 0 : 0; const pg = +((pcD.porFolio || {})[String(m2.folio)] || 0).toFixed(2); return ["#" + m2.folio, m2.alumno || "", m2.curso || "", F(cb), F(pg), F(Math.max(0, +(cb - pg).toFixed(2)))]; }), total: F(pcD.pendiente) + (pcD.cubierto > 0 ? " (ya pagado " + F(pcD.cubierto) + " \xB7 total esperado " + F(pcD.esperado) + ")" : ""), onClose: () => setDet(null) }); }
     if (det === "real") return React.createElement(FichaDetalle, { titulo: "\u2705 Ya cobrado este mes (neto)", cols: ["Fecha", "Concepto", "Neto"], rows: ingresos.filter((i) => i.date && i.date.startsWith(cm)).map((i) => [String(i.date), i.desc || "", F(i.neto || 0)]), total: F(ingresoReal(cm)), onClose: () => setDet(null) });
     if (det === "gfijos") return React.createElement(FichaDetalle, { titulo: "\u{1F4B8} Gastos fijos del mes", cols: ["Gasto", "Ocurrencias", "Total"], rows: gastosFijos.filter((g) => g.active).map((g) => { const skipped = new Set(g.skippedDates || []); const ocs = ocurrenciasGasto(g, cm).filter((f2) => !skipped.has(f2) && ocurrenciaVigente(g, f2)); const tOc = ocs.reduce((a, f2) => a + montoOcurrencia(g, f2), 0); return [g.desc || "", ocs.map((f2) => F(montoOcurrencia(g, f2))).join(" + ") || "0", F(tOc)]; }).filter((r) => r[2] !== F(0)), total: F(gastosFijosMes(cm)), onClose: () => setDet(null) });
     return null; })(), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4C8} Pron\xF3stico de Ingresos"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 2 } }, "Proyecci\xF3n basada en alumnos regulares del CRM \xB7 ", mats.length, " matr\xEDculas \xB7 ", cursos.length, " cursos"))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 18 } }, [
-    { l: "Contratos activos hoy", v: alumnosActivosEnMes(cm, mats, cursos).length, c: "var(--ac)", k: "activos",
+    { l: "Contratos activos hoy", v: contratosRegularesCRM(crmData, cm).length, c: "var(--ac)", k: "activos",
       // Se cuentan FOLIOS, no personas: un alumno inscrito en dos cursos son dos contratos.
       // La pestaña Alumnos CRM agrupa por nombre, por eso daba un número menor.
-      sub: (function(){ var s2 = new Set(alumnosActivosEnMes(cm, mats, cursos).map(function(m2){ return String(m2.alumno || "").trim().toLowerCase(); })); return s2.size + " alumno(s) distintos"; })() },
+      sub: (function(){ var s2 = new Set(contratosRegularesCRM(crmData, cm).map(function(m2){ return String(m2.alumno || "").trim().toLowerCase(); })); return s2.size + " alumno(s) distintos"; })() },
     { l: "Por recibir este mes", v: fmt$(ingresoPorCobrar(cm).pendiente), c: "var(--gr)", mono: true, k: "proy",
       sub: (function(){ var pc = ingresoPorCobrar(cm); return pc.cubierto > 0 ? ("ya pagado " + fmt$(pc.cubierto) + " \xB7 total esperado " + fmt$(pc.esperado)) : null; })() },
     { l: "Ya cobrado este mes", v: fmt$(ingresoReal(cm)), c: "var(--gr)", mono: true, k: "real" },
@@ -5188,7 +5233,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.06-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.06-2"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -5224,7 +5269,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.10.06-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.10.06-2\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.10.06-2\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.10.08-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.06-2\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.08-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -197,7 +197,7 @@ const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.10.06-2";
+const BUILD_VERSION = "BUILD v2026.10.08-1";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -3017,6 +3017,18 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
     setPagosGastos2(upd);
     await stor("set", "pagosGastos", upd);
   }
+  async function eliminarGastosFijos(ids) {
+    const set = new Set((ids || []).map(String));
+    const lst = gastosFijos.filter((g) => g && set.has(String(g.id)));
+    if (!lst.length) return false;
+    const det = lst.map((g) => "\u2022 " + (g.desc || "(sin nombre)") + " \u2014 " + fmt$(parseFloat(g.monto) || 0)).join("\n");
+    if (!confirm("\xBFEliminar " + (lst.length === 1 ? "este gasto fijo" : "estos " + lst.length + " gastos fijos") + "?\n\n" + det + "\n\nDejar\xE1n de generar pagos pendientes. Los pagos ya registrados se conservan en el historial.\n\nEsta acci\xF3n no se puede deshacer.")) return false;
+    const upd = gastosFijos.filter((g) => !(g && set.has(String(g.id))));
+    setGastosFijos(upd);
+    if (editando && set.has(String(editando.id))) setEditando(null);
+    await stor("set", "gastosFijos", upd);
+    return true;
+  }
   async function reactivar(id) {
     const upd = gastosFijos.map((fe) => fe.id === id ? { ...fe, active: true } : fe);
     setGastosFijos(upd);
@@ -3036,7 +3048,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
   return /* @__PURE__ */ React.createElement("div", null, showExtraord && /* @__PURE__ */ React.createElement(ModalGastoExtraordinario, { expenseCats: cats, pagosGastos: pagosGastos2, setPagosGastos: setPagosGastos2, onClose: () => setShowExtraord(false) }), (showForm || editando) && /* @__PURE__ */ React.createElement(ModalGastoFijo, { expenseCats: cats, initial: editando || void 0, onSave: handleSave, onClose: () => {
     setShowForm(false);
     setEditando(null);
-  } }), pagando && /* @__PURE__ */ React.createElement(ModalPagarGasto, { gasto: pagando, onSave: (d) => pagar(d, pagando), onClose: () => setPagando(null) }), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4CB} Gastos"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: () => setShowExtraord(true) }, "\u26A1 Gasto Extraordinario"), /* @__PURE__ */ React.createElement("button", { className: showLista ? "btn btn-p" : "btn btn-o", onClick: () => setShowLista(!showLista) }, "\u{1F4D1} Lista de gastos fijos"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: () => setShowForm(true) }, "+ Agregar Gasto Fijo"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: exportarLibroContable, title: "Exportar libro contable del mes en curso" }, "\u{1F4E5} Exportar mes"))), showLista && React.createElement(ListaGastosFijos, { gastosFijos, pagosGastos: pagosGastos2, disp, onUpdate: actualizarGastoFijo, onEdit: (g) => setEditando(g), onReactivar: reactivar }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 } }, [{ l: "\u2713 Pagado en " + mesLabelGlobal(cm), v: disp(totPagado), c: "var(--gr)", tip: "Todo lo que ya sali\xF3 este mes: gastos fijos, extraordinarios, instructores y comisiones." }, { l: "\u23F3 Pendiente por pagar", v: disp(totPend), c: totPend > 0 ? "var(--rd)" : "var(--tx2)", tip: "Gastos fijos del mes sin pagar + vencidos anteriores + comisiones + n\xF3mina de instructores." }, { l: "\u{1F4B0} TOTAL del mes", v: disp(totMesCompleto), c: "var(--tx)", tip: "Pagado + pendiente = lo que costar\xE1 " + mesLabelGlobal(cm) + " completo." }, totVencidoAnterior > 0 && { l: "\u26A0\uFE0F Vencido de meses anteriores", v: disp(totVencidoAnterior), c: "var(--rd)", tip: "Incluido dentro del pendiente." }].filter(Boolean).map(({ l, v, c, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c } }, v)))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" } },
+  } }), pagando && /* @__PURE__ */ React.createElement(ModalPagarGasto, { gasto: pagando, onSave: (d) => pagar(d, pagando), onClose: () => setPagando(null) }), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4CB} Gastos"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: () => setShowExtraord(true) }, "\u26A1 Gasto Extraordinario"), /* @__PURE__ */ React.createElement("button", { className: showLista ? "btn btn-p" : "btn btn-o", onClick: () => setShowLista(!showLista) }, "\u{1F4D1} Lista de gastos fijos"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: () => setShowForm(true) }, "+ Agregar Gasto Fijo"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: exportarLibroContable, title: "Exportar libro contable del mes en curso" }, "\u{1F4E5} Exportar mes"))), showLista && React.createElement(ListaGastosFijos, { gastosFijos, pagosGastos: pagosGastos2, disp, onUpdate: actualizarGastoFijo, onEdit: (g) => setEditando(g), onReactivar: reactivar, onDelete: eliminarGastosFijos }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 } }, [{ l: "\u2713 Pagado en " + mesLabelGlobal(cm), v: disp(totPagado), c: "var(--gr)", tip: "Todo lo que ya sali\xF3 este mes: gastos fijos, extraordinarios, instructores y comisiones." }, { l: "\u23F3 Pendiente por pagar", v: disp(totPend), c: totPend > 0 ? "var(--rd)" : "var(--tx2)", tip: "Gastos fijos del mes sin pagar + vencidos anteriores + comisiones + n\xF3mina de instructores." }, { l: "\u{1F4B0} TOTAL del mes", v: disp(totMesCompleto), c: "var(--tx)", tip: "Pagado + pendiente = lo que costar\xE1 " + mesLabelGlobal(cm) + " completo." }, totVencidoAnterior > 0 && { l: "\u26A0\uFE0F Vencido de meses anteriores", v: disp(totVencidoAnterior), c: "var(--rd)", tip: "Incluido dentro del pendiente." }].filter(Boolean).map(({ l, v, c, tip }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: tip }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c } }, v)))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" } },
     /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--tx2)" } }, mesVerG === "actual" ? "Estado \u2014 " : "Viendo \u2014 "),
     /* @__PURE__ */ React.createElement("select", { value: mesVerG, onChange: (e) => setMesVerG(e.target.value), style: { fontSize: 12, fontWeight: 700, textTransform: "capitalize", background: "var(--s2)", color: "var(--tx)", border: "1px solid var(--br)", borderRadius: 6, padding: "3px 8px" } },
       /* @__PURE__ */ React.createElement("option", { value: "actual" }, "\u{1F4C5} Por pagar (" + cmLabel + ")"),
@@ -3169,8 +3181,15 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
 // ── LISTA COMPLETA DE GASTOS FIJOS ──────────────────────────────────────────
 // Todos los gastos fijos (incluso los que empiezan en meses posteriores), con fecha de
 // inicio editable, total a pagar y monto editable por mes.
-function ListaGastosFijos({ gastosFijos, pagosGastos, disp, onUpdate, onEdit, onReactivar }) {
+function ListaGastosFijos({ gastosFijos, pagosGastos, disp, onUpdate, onEdit, onReactivar, onDelete }) {
   const F = disp || fmt$;
+  const [sel, setSel] = useState({});
+  const toggleSel = (id) => setSel((s) => { const n = { ...s }; if (n[id]) delete n[id]; else n[id] = true; return n; });
+  async function borrar(ids) {
+    if (!onDelete || !ids.length) return;
+    const ok = await onDelete(ids);
+    if (ok) setSel((s) => { const n = { ...s }; ids.forEach((id) => delete n[id]); return n; });
+  }
   const [abierto, setAbierto] = useState(null);
   const [verInactivos, setVerInactivos] = useState(false);
   const [totalDraft, setTotalDraft] = useState("");
@@ -3181,6 +3200,10 @@ function ListaGastosFijos({ gastosFijos, pagosGastos, disp, onUpdate, onEdit, on
     return String(desdeGF(a) || "").localeCompare(String(desdeGF(b) || ""));
   });
   const nInact = (gastosFijos || []).filter((g) => g && !g.active).length;
+  const idsVisibles = lista.map((g) => g.id);
+  const selIds = idsVisibles.filter((id) => sel[id]);
+  const todosSel = idsVisibles.length > 0 && selIds.length === idsVisibles.length;
+  const totSel = lista.filter((g) => sel[g.id]).reduce((s, g) => s + (parseFloat(g.monto) || 0), 0);
   const frecTxt = (g) => (g.frecuencia || "mensual") === "semanal" ? "Semanal \u00B7 " + (DIAS_SEMANA[g.diaSemana] || "") : "Mensual \u00B7 d\u00EDa " + (g.dia || 1);
   function filasPlan(g) {
     const plan = planGastoFijo(g);
@@ -3232,9 +3255,15 @@ function ListaGastosFijos({ gastosFijos, pagosGastos, disp, onUpdate, onEdit, on
       React.createElement("div", { style: { fontWeight: 700, fontSize: 14 } }, "\u{1F4D1} Lista completa de gastos fijos ", React.createElement("span", { style: { fontSize: 12, color: "var(--tx3)", fontWeight: 400 } }, "(" + lista.length + ")")),
       nInact > 0 && React.createElement("label", { style: { fontSize: 12, color: "var(--tx2)", display: "flex", gap: 6, alignItems: "center", cursor: "pointer" } },
         React.createElement("input", { type: "checkbox", checked: verInactivos, onChange: (e) => setVerInactivos(e.target.checked) }), "Mostrar inactivos (" + nInact + ")")),
+    selIds.length > 0 && React.createElement("div", { className: "gf-bulk", style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "rgba(244,107,107,.08)", border: "1px solid rgba(244,107,107,.4)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 } },
+      React.createElement("strong", { style: { fontSize: 13 } }, selIds.length + " seleccionado" + (selIds.length !== 1 ? "s" : "")),
+      React.createElement("span", { className: "mono", style: { fontSize: 12, color: "var(--tx2)" } }, F(totSel) + " por periodo"),
+      React.createElement("button", { className: "btn btn-d btn-sm gf-bulk-del", style: { marginLeft: "auto" }, onClick: () => borrar(selIds) }, "\u{1F5D1} Eliminar seleccionados"),
+      React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setSel({}) }, "Cancelar selecci\xF3n")),
     lista.length === 0 ? React.createElement("div", { style: { color: "var(--tx3)", fontSize: 12, padding: 10, textAlign: "center" } }, "Sin gastos fijos") :
     React.createElement("div", { className: "twrap", style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
       React.createElement("thead", null, React.createElement("tr", { style: { borderBottom: "1px solid var(--br)" } },
+        React.createElement("th", { style: { ...th, width: 30 } }, React.createElement("input", { type: "checkbox", className: "gf-sel-all", title: "Seleccionar todos", checked: todosSel, onChange: (e) => setSel(e.target.checked ? Object.fromEntries(idsVisibles.map((id) => [id, true])) : {}) })),
         ["Concepto", "Frecuencia", "Inicio", "Monto periodo", "Total a pagar", "Pagado", "Restante", "Termina", "Estado", ""].map((c) => React.createElement("th", { key: c, style: th }, c)))),
       React.createElement("tbody", null, lista.map((g) => {
         const plan = planGastoFijo(g);
@@ -3245,7 +3274,8 @@ function ListaGastosFijos({ gastosFijos, pagosGastos, disp, onUpdate, onEdit, on
         const open = abierto === g.id;
         const filas = open ? filasPlan(g) : [];
         return [
-          React.createElement("tr", { key: g.id, className: "gf-row", style: { borderBottom: open ? "none" : "1px solid var(--br)", opacity: g.active ? 1 : 0.55 } },
+          React.createElement("tr", { key: g.id, className: "gf-row", style: { borderBottom: open ? "none" : "1px solid var(--br)", opacity: g.active ? 1 : 0.55, background: sel[g.id] ? "rgba(244,107,107,.07)" : void 0 } },
+            React.createElement("td", { style: { ...td, width: 30 } }, React.createElement("input", { type: "checkbox", className: "gf-sel", checked: !!sel[g.id], onChange: () => toggleSel(g.id) })),
             React.createElement("td", { style: td }, React.createElement("div", { style: { fontWeight: 600 } }, g.desc || ""), React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)" } }, g.cat || "")),
             React.createElement("td", { style: { ...td, whiteSpace: "nowrap", color: "var(--tx2)" } }, frecTxt(g)),
             React.createElement("td", { style: td }, React.createElement("input", { type: "date", className: "finp gf-inicio", value: desde || "", style: { padding: "4px 6px", fontSize: 12, minWidth: 130 }, onChange: (e) => { if (e.target.value) onUpdate(g.id, { vigenteDesde: e.target.value }); } })),
@@ -3257,9 +3287,10 @@ function ListaGastosFijos({ gastosFijos, pagosGastos, disp, onUpdate, onEdit, on
             React.createElement("td", { style: td }, React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: estado[1], whiteSpace: "nowrap" } }, estado[0])),
             React.createElement("td", { style: { ...td, whiteSpace: "nowrap", textAlign: "right" } },
               React.createElement("button", { className: "btn btn-o btn-sm gf-plan-btn", title: "Total a pagar y monto de cada mes", onClick: () => { setAbierto(open ? null : g.id); setTotalDraft(plan ? String(plan.total) : ""); } }, open ? "\u25B2 Plan" : "\u{1F4C5} Plan"), " ",
-              React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar", onClick: () => onEdit(g) }, "\u270F\uFE0F"),
+              React.createElement("button", { className: "btn btn-o btn-sm", title: "Editar", onClick: () => onEdit(g) }, "\u270F\uFE0F"), " ",
+              React.createElement("button", { className: "btn btn-d btn-sm gf-del", title: "Eliminar este gasto fijo", onClick: () => borrar([g.id]) }, "\u{1F5D1}"),
               !g.active && onReactivar && React.createElement("button", { className: "btn btn-o btn-sm", style: { marginLeft: 4 }, onClick: () => onReactivar(g.id) }, "Reactivar"))),
-          open && React.createElement("tr", { key: g.id + "_plan", style: { borderBottom: "1px solid var(--br)" } }, React.createElement("td", { colSpan: 10, style: { padding: "4px 10px 14px" } },
+          open && React.createElement("tr", { key: g.id + "_plan", style: { borderBottom: "1px solid var(--br)" } }, React.createElement("td", { colSpan: 11, style: { padding: "4px 10px 14px" } },
             React.createElement("div", { className: "gf-plan", style: { background: "var(--s2)", borderRadius: 8, padding: 12 } },
               React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 } },
                 React.createElement("span", { style: { fontSize: 12, fontWeight: 700 } }, "Total a pagar:"),
@@ -5233,7 +5264,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.06-2"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.08-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -5269,7 +5300,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.10.06-2\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.10.08-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

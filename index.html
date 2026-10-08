@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.10.08-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.10.08-2\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.08-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.08-2\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -197,7 +197,7 @@ const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.10.08-1";
+const BUILD_VERSION = "BUILD v2026.10.08-2";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -736,7 +736,48 @@ function BonosDominicales({ crmData, pagosGastos: pagosGastos2, setPagosGastos: 
 const DIA_PAGO_COMISIONES = 15;
 const DIA_PAGO_INSTRUCTORES = 10;
 function gastoEnMes(g, ym) {
-  return g.mes === ym || g.ocurrencia && g.ocurrencia.startsWith(ym);
+  // `mes` = mes en que salió el dinero. `ocurrencia` (gastos fijos) es el periodo que
+  // cubre el pago y NO decide el mes contable cuando ya existe `mes`.
+  if (g && g.mes) return g.mes === ym;
+  if (g && g.ocurrencia) return String(g.ocurrencia).startsWith(ym);
+  return String((g && (g.fecha || g.date)) || "").startsWith(ym);
+}
+// ── PAGOS DE GASTOS FIJOS: periodo cubierto vs mes en que se pagó ─────────────
+// Cada pago de un gasto fijo cubre UNA ocurrencia (`ocurrencia`) y se contabiliza en
+// el mes en que salió el dinero (`mes`). Antes ambos se mezclaban: la renta de agosto
+// pagada desde el recordatorio en septiembre quedaba con fecha de agosto y mes de
+// septiembre, así que contaba como pagada AGOSTO y SEPTIEMBRE a la vez.
+const _esPagoRecordatorio = (p) => /desde recordatorio/i.test(String((p && p.notas) || ""));
+const _fechaLocalISO = (iso) => { const d = new Date(iso); if (isNaN(d)) return ""; return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+// Periodo que cubre un pago de gasto fijo (fecha AAAA-MM-DD o, en registros viejos, AAAA-MM).
+function ocurrenciaDePago(p) {
+  if (!p) return "";
+  if (p.ocurrencia) return String(p.ocurrencia);
+  if (_esPagoRecordatorio(p)) return String(p.fecha || p.date || p.mes || "");
+  return String(p.mes || String(p.fecha || p.date || "").slice(0, 7));
+}
+function migrarPagosFijos(lista) {
+  let cambio = false;
+  const out = (lista || []).map((p) => {
+    if (!p || !p.gastoId) return p;
+    if (p.ocurrencia && p.mes) return p;
+    const q = { ...p };
+    const recordatorio = _esPagoRecordatorio(p);
+    if (!q.ocurrencia) q.ocurrencia = ocurrenciaDePago(p);
+    let fecha = String(p.fecha || p.date || "");
+    if (recordatorio) {
+      // El recordatorio guardaba como fecha la del vencimiento; la real es la de registro.
+      const reg = p.createdAt ? _fechaLocalISO(p.createdAt) : "";
+      if (reg && fecha && reg > fecha) fecha = reg;
+      q.mes = p.mes && reg && reg.slice(0, 7) !== p.mes ? p.mes : (fecha.slice(0, 7) || p.mes);
+      if (fecha) { q.fecha = fecha; q.date = fecha; }
+    } else {
+      q.mes = fecha.slice(0, 7) || p.mes || String(q.ocurrencia).slice(0, 7);
+    }
+    cambio = true;
+    return q;
+  });
+  return cambio ? out : lista;
 }
 // ── PAGOS A INSTRUCTORES: mes de las HORAS vs mes del GASTO ──────────────────
 // `mes` es el mes en que sale el dinero (es lo que lee gastoEnMes y con lo que se
@@ -890,17 +931,13 @@ function montoOcurrencia(fe, fecha) {
   return montoBaseOcGF(fe, fecha);
 }
 function pagoDeOcurrencia(fe, fechaISO, pagosGastos2) {
-  if ((fe.frecuencia || "mensual") === "semanal") {
-    return pagosGastos2.find((p) => p.gastoId === fe.id && p.ocurrencia === fechaISO);
-  }
-  const occMonth = fechaISO.slice(0, 7);
-  return pagosGastos2.find((p) =>
-    p.gastoId === fe.id && (
-      p.mes === occMonth ||                // pago registrado en el mes correcto (pago a tiempo)
-      p.fecha === fechaISO ||              // fecha exacta de la ocurrencia (pago tardío desde alerta)
-      (p.date && p.date === fechaISO)      // campo date alternativo
-    )
-  );
+  const sem = (fe.frecuencia || "mensual") === "semanal";
+  return (pagosGastos2 || []).find((p) => {
+    if (!p || p.gastoId !== fe.id) return false;
+    const oc = ocurrenciaDePago(p);
+    if (!oc) return false;
+    return sem ? oc === fechaISO : oc.slice(0, 7) === String(fechaISO).slice(0, 7);
+  });
 }
 function calcPagosInstructores(crmData, mesFiltro) {
   const instructores = (crmData == null ? void 0 : crmData.instructores) || [];
@@ -1504,7 +1541,7 @@ function ModalGastoFijo({ onSave, onClose, expenseCats, initial }) {
   return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 520 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, initial ? "\u270F\uFE0F Editar Gasto Fijo" : "\u{1F4CB} Nuevo Gasto Fijo"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Descripci\xF3n *"), /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "Ej: Renta del local", value: f.desc, onChange: (e) => set("desc", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Monto *"), /* @__PURE__ */ React.createElement("input", { className: "finp mono", type: "number", min: "0", step: "0.01", placeholder: "0.00", value: f.monto, onChange: (e) => set("monto", e.target.value) }), /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, cursor: "pointer", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!f.enDolares, onChange: (e) => set("enDolares", e.target.checked) }), "\u{1F4B5} El monto est\xE1 en USD (se convierte a MXN autom\xE1ticamente)")), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Frecuencia de pago"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: f.frecuencia !== "semanal" ? "grid" : "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 10, padding: "10px 13px", border: `2px solid var(--br)`, borderRadius: 8, cursor: "pointer", fontSize: 13, background: "var(--s2)" } }, /* @__PURE__ */ React.createElement("div", null, "\u{1F4C5} Mensual \u2014 el mismo d\xEDa cada mes"), /* @__PURE__ */ React.createElement("input", { type: "radio", name: "gf-frecuencia", checked: (f.frecuencia || "mensual") === "mensual", onChange: () => set("frecuencia", "mensual"), style: { width: 16, height: 16, flexShrink: 0 } })), (f.frecuencia || "mensual") === "mensual" && /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { marginLeft: 8 } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "D\xEDa de Pago (1-31)"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "number", min: "1", max: "31", value: f.dia, onChange: (e) => set("dia", e.target.value) })), /* @__PURE__ */ React.createElement("label", { style: { display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 10, padding: "10px 13px", border: `2px solid var(--br)`, borderRadius: 8, cursor: "pointer", fontSize: 13, background: "var(--s2)" } }, /* @__PURE__ */ React.createElement("div", null, "\u{1F501} Semanal \u2014 cada determinado d\xEDa de la semana, como pago independiente"), /* @__PURE__ */ React.createElement("input", { type: "radio", name: "gf-frecuencia", checked: f.frecuencia === "semanal", onChange: () => set("frecuencia", "semanal"), style: { width: 16, height: 16, flexShrink: 0 } })), f.frecuencia === "semanal" && /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { marginLeft: 8 } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Cada"), /* @__PURE__ */ React.createElement("select", { className: "finp", value: (_a = f.diaSemana) != null ? _a : 1, onChange: (e) => set("diaSemana", e.target.value) }, DIAS_SEMANA.map((d, i) => /* @__PURE__ */ React.createElement("option", { key: i, value: i }, d))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Cada ", DIAS_SEMANA[(_b = f.diaSemana) != null ? _b : 1].toLowerCase(), " aparecer\xE1 como un pago propio en Gastos Fijos.")))), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Categor\xEDa"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, /* @__PURE__ */ React.createElement("select", { className: "finp", style: { flex: 1 }, value: f.cat, onChange: (e) => set("cat", e.target.value) }, cats.map((c) => /* @__PURE__ */ React.createElement("option", { key: c }, c))), /* @__PURE__ */ React.createElement("button", { className: "btn btn-o btn-sm", title: "Nueva categor\xEDa", onClick: () => setShowCat(!showCat) }, "\uFF0B")), showCat && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 6 } }, /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "Nombre de la nueva categor\xEDa", value: newCat, onChange: (e) => setNewCat(e.target.value), onKeyDown: (e) => e.key === "Enter" && addCat() }), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g btn-sm", onClick: addCat }, "Agregar"))), React.createElement("div", { className: "fgrp" }, React.createElement("label", { className: "flbl" }, "Fecha de inicio"), React.createElement("input", { className: "finp", type: "date", value: f.vigenteDesde || "", onChange: (e) => set("vigenteDesde", e.target.value) }), React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Desde cu\xE1ndo se empieza a pagar. Vac\xEDo = desde hoy.")), React.createElement("div", { className: "fgrp" }, React.createElement("label", { className: "flbl" }, "Total a pagar (opcional)"), React.createElement("input", { className: "finp mono", type: "number", min: "0", step: "0.01", placeholder: "Sin l\xEDmite", value: f.montoTotal == null ? "" : f.montoTotal, onChange: (e) => set("montoTotal", e.target.value) }), React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 4 } }, "Se paga el monto de cada periodo hasta cubrir este total.")), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Notas"), /* @__PURE__ */ React.createElement("textarea", { className: "finp", placeholder: "Proveedor, referencia...", value: f.notas, onChange: (e) => set("notas", e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: guardar, disabled: !f.desc || !f.monto }, "\u2713 ", initial ? "Guardar cambios" : "Agregar"))));
 }
 function ModalPagarGasto({ gasto, onSave, onClose }) {
-  const [f, setF] = useState({ fecha: gasto._fecha || todayStr(), monto: gasto.monto.toString(), desc: gasto.desc || "", notas: "" });
+  const [f, setF] = useState({ fecha: gasto._fecha && gasto._fecha < hoyRealStr() ? hoyRealStr() : (gasto._fecha || hoyRealStr()), monto: gasto.monto.toString(), desc: gasto.desc || "", notas: "" });
   return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u2705 Registrar Pago"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1", marginBottom: 4 } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Nombre del pago"), /* @__PURE__ */ React.createElement("input", { className: "finp", value: f.desc, onChange: (e) => setF((p) => ({ ...p, desc: e.target.value })) })), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha de Pago"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: f.fecha, onChange: (e) => setF((p) => ({ ...p, fecha: e.target.value })) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Monto Pagado"), /* @__PURE__ */ React.createElement("input", { className: "finp mono", type: "number", value: f.monto, onChange: (e) => setF((p) => ({ ...p, monto: e.target.value })) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Notas / Referencia"), /* @__PURE__ */ React.createElement("input", { className: "finp", placeholder: "Folio, comprobante...", value: f.notas, onChange: (e) => setF((p) => ({ ...p, notas: e.target.value })) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-g", onClick: () => onSave({ ...f, monto: parseFloat(f.monto), desc: f.desc || gasto.desc }) }, "\u2713 Confirmar Pago"))));
 }
 function MiniBarChart({ data, height = 200 }) {
@@ -2779,7 +2816,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
           // Incluir: mes actual siempre, meses anteriores solo si vencidos y sin pagar
           if (mesR !== cm && (paid || diff >= 0)) return;
           vistasKey.add(fe.id + "|" + fecha);
-          out.push({ ...fe, monto: montoOcurrencia(fe, fecha), _fecha: fecha, paid, isOverdue: !paid && diff < 0, isDueSoon: !paid && diff >= 0 && diff <= 7, daysLeft: diff });
+          out.push({ ...fe, monto: montoOcurrencia(fe, fecha), _fecha: fecha, _mesAnterior: mesR !== cm, paid, isOverdue: !paid && diff < 0, isDueSoon: !paid && diff >= 0 && diff <= 7, daysLeft: diff });
         });
       });
     });
@@ -3037,8 +3074,8 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
   async function pagar(d, gasto) {
     const { fecha, monto, notas, desc: pagoDesc } = d;
     const pago = { id: uid(), gastoId: gasto.id, desc: pagoDesc || gasto.desc, monto, fecha, date: fecha, cat: gasto.cat, notas, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
-    if ((gasto.frecuencia || "mensual") === "semanal") pago.ocurrencia = gasto._fecha;
-    else pago.mes = (gasto._fecha || fecha || cm + "-01").slice(0, 7); // mes REAL de la ocurrencia pagada, no el mes actual
+    pago.ocurrencia = gasto._fecha || fecha; // periodo que cubre
+    pago.mes = String(fecha || gasto._fecha || cm + "-01").slice(0, 7); // mes en que salió el dinero
     const upd = [...pagosGastos2, pago];
     setPagosGastos2(upd);
     await stor("set", "pagosGastos", upd);
@@ -3078,7 +3115,7 @@ function GastosFijos({ gastosFijos, setGastosFijos, pagosGastos: pagosGastos2, s
         "Semana: " + fe._fecha + "\n\nOK = Eliminar SOLO esta semana\nCancelar = No hacer nada\n\n(Para desactivar TODO el gasto, usa el bot\xF3n \u270F\uFE0F Editar)"
       )) return;
       if (fe.paid) {
-        const pk = pagosGastos2.find((p) => p.gastoId === fe.id && (p.ocurrencia === fe._fecha || p.mes === fe._fecha.slice(0, 7) && !p.ocurrencia));
+        const pk = pagoDeOcurrencia(fe, fe._fecha, pagosGastos2);
         if (pk) eliminarPagoOcurrencia(pk.id);
         else alert("No se encontr\xF3 el pago de esta semana.");
       } else {
@@ -4105,7 +4142,7 @@ function ModalEditarGasto({ pago, onSave, onClose }) {
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   return /* @__PURE__ */ React.createElement("div", { className: "moverlay" }, /* @__PURE__ */ React.createElement("div", { className: "modal", style: { maxWidth: 440 } }, /* @__PURE__ */ React.createElement("div", { className: "mhdr" }, /* @__PURE__ */ React.createElement("div", { className: "mtitle" }, "\u270F\uFE0F Editar Gasto"), /* @__PURE__ */ React.createElement("button", { className: "mclose", onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "fgrid" }, /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Fecha"), /* @__PURE__ */ React.createElement("input", { className: "finp", type: "date", value: f._fecha, onChange: (e) => set("_fecha", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp" }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Monto"), /* @__PURE__ */ React.createElement("input", { className: "finp mono", type: "number", min: "0", step: "0.01", value: f.monto, onChange: (e) => set("monto", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Descripci\xF3n"), /* @__PURE__ */ React.createElement("input", { className: "finp", value: f.desc || "", onChange: (e) => set("desc", e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "fgrp", style: { gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("label", { className: "flbl" }, "Notas"), /* @__PURE__ */ React.createElement("input", { className: "finp", value: f.notas || "", onChange: (e) => set("notas", e.target.value) }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-o", onClick: onClose }, "Cancelar"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-p", onClick: () => {
     const upd = { ...f, monto: parseFloat(f.monto) || 0, fecha: f._fecha, date: f._fecha };
-    if (upd.ocurrencia) upd.ocurrencia = f._fecha;
+    upd.mes = String(f._fecha).slice(0, 7);
     onSave(upd);
   } }, "\u2713 Guardar"))));
 }
@@ -4617,7 +4654,7 @@ function App() {
       try {
         setIngresos(JSON.parse(localStorage.getItem("acad_v1_ingresos") || "[]"));
         setGastosFijos(JSON.parse(localStorage.getItem("acad_v1_gastosFijos") || "[]"));
-        setPagosGastos2(migrarPagosInstructores(JSON.parse(localStorage.getItem("acad_v1_pagosGastos") || "[]")));
+        setPagosGastos2(migrarPagosFijos(migrarPagosInstructores(JSON.parse(localStorage.getItem("acad_v1_pagosGastos") || "[]"))));
         const ov = JSON.parse(localStorage.getItem("acad_v1_comisionOverrides") || "null");
         if (ov) setComisionOverrides(ov);
         const cats = JSON.parse(localStorage.getItem("acad_v1_expenseCats") || "null");
@@ -4630,7 +4667,7 @@ function App() {
           const d = snap.val() || {};
           setIngresos(d.ingresos || []);
           setGastosFijos(d.gastosFijos || []);
-          setPagosGastos2(migrarPagosInstructores(d.pagosGastos || []));
+          setPagosGastos2(migrarPagosFijos(migrarPagosInstructores(d.pagosGastos || [])));
           setExcludedCrmFolios(d.excludedCrmFolios || []);
           setComisionOverrides(d.comisionOverrides || {});
           setRetos(Array.isArray(d.retos) ? d.retos : (d.retos ? Object.values(d.retos) : []));
@@ -4696,7 +4733,7 @@ function App() {
       if (data[k] != null) {
         if (k === "ingresos") setIngresos(data[k]);
         else if (k === "gastosFijos") setGastosFijos(data[k]);
-        else if (k === "pagosGastos") setPagosGastos2(migrarPagosInstructores(data[k]));
+        else if (k === "pagosGastos") setPagosGastos2(migrarPagosFijos(migrarPagosInstructores(data[k])));
         else if (k === "expenseCats" && Array.isArray(data[k]) && data[k].length) setExpenseCats(data[k]);
         await stor("set", k, data[k]);
         applied.push(MAP[k]);
@@ -4823,9 +4860,8 @@ function App() {
       await stor("set", "pagosGastos", updC);
       return;
     }
-    const pago = { id: uid(), gastoId: p.id, desc: p.desc, monto: p.monto, fecha: p._fecha, date: p._fecha, cat: p.cat, notas: "Marcado pagado desde recordatorio", createdAt: (/* @__PURE__ */ new Date()).toISOString() };
-    if ((p.frecuencia || "mensual") === "semanal") pago.ocurrencia = p._fecha;
-    else pago.mes = monthStr();
+    const fPago = p._fecha > hoyRealStr() ? p._fecha : hoyRealStr();
+    const pago = { id: uid(), gastoId: p.id, desc: p.desc, monto: p.monto, fecha: fPago, date: fPago, mes: fPago.slice(0, 7), ocurrencia: p._fecha, cat: p.cat, notas: "Marcado pagado desde recordatorio", createdAt: (/* @__PURE__ */ new Date()).toISOString() };
     const upd = [...pagosGastos2, pago];
     setPagosGastos2(upd);
     await stor("set", "pagosGastos", upd);
@@ -4933,7 +4969,7 @@ function App() {
           if (sk.has(fecha)) return;
           const diff = Math.round((new Date(fecha + "T00:00:00") - new Date(hoyISO + "T00:00:00")) / 864e5);
           if (diff >= 0) return; // no vencido
-          const pagado = pagosGastos2.find((p) => p.gastoId === g.id && (p.mes === fecha.slice(0, 7) || p.fecha === fecha || (p.date && p.date === fecha)));
+          const pagado = pagoDeOcurrencia(g, fecha, pagosGastos2);
           if (!pagado) vencidos += montoOcurrencia(g, fecha);
         });
       }
@@ -5264,7 +5300,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.08-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.08-2"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -5300,7 +5336,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.10.08-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.10.08-2\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

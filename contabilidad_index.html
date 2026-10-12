@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.10.08-4\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.10.12-1\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.08-4\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.10.12-1\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -191,13 +191,13 @@ const nombreTarjeta = (t) => (TARJETA_TASAS_GETNET[t] || {}).nombre || "";
 const esTerminal = (met) => !!TERMINALES[metBase(met)];
 const tasaTerminal = (met) => (TERMINALES[metBase(met)] || TERMINALES.card).base;
 const nombreTerminal = (met) => (TERMINALES[metBase(met)] || TERMINALES.card).nombre;
-const INCOME_CATS = ["Mensualidad", "Pago \xFAnico", "Clase diagn\xF3stico", "Inscripci\xF3n", "Taller", "Certificaci\xF3n", "Material Did\xE1ctico", "Servicio Extra", "Otro"];
+const INCOME_CATS = ["Mensualidad", "Pago \xFAnico", "Clase diagn\xF3stico", "Asesor\xEDa", "Inscripci\xF3n", "Taller", "Certificaci\xF3n", "Material Did\xE1ctico", "Servicio Extra", "Otro"];
 const DEFAULT_EXPENSE_CATS = ["Renta", "Electricidad", "Internet", "Agua", "Salarios", "Comisiones", "Papeler\xEDa", "Publicidad", "Mantenimiento", "Impuestos", "Software/Licencias", "Equipos", "Suscripciones", "Otro"];
 const fmt$ = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(n || 0);
 const fmtUSD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.10.08-4";
+const BUILD_VERSION = "BUILD v2026.10.12-1";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -5299,6 +5299,56 @@ function App() {
     setIngresos(updD);
     stor("set", "ingresos", updD);
   }, [crmData, ingresos, loaded]);
+  // Sync de ASESORÍAS cobradas en el CRM (pestaña Cotizaciones → Asesoría). Se identifican
+  // por asesoriaPagoId y no llevan crmFolio: se crean, actualizan y eliminan según el pago
+  // registrado en el CRM. Admite todos los métodos (efectivo, transferencia, MP, Getnet, mixto).
+  useEffect(() => {
+    if (!loaded || !crmData) return;
+    const _raw = crmData.pagosAsesoria;
+    const _lista = Array.isArray(_raw) ? _raw : (_raw && typeof _raw === "object" ? Object.values(_raw) : []);
+    const pagos = _lista.filter((p) => p && p.id && (parseFloat(p.monto) || 0) > 0);
+    const porId = {};
+    pagos.forEach((p) => { porId[p.id] = p; });
+    const existentes = ingresos.filter((i) => i.asesoriaPagoId);
+    const existentesIds = new Set(existentes.map((i) => i.asesoriaPagoId));
+    const _fmtAs = (p) => {
+      const monto = parseFloat(p.monto) || 0;
+      const comm = +((parseFloat(p.commMP) || 0) + (parseFloat(p.ivaMP) || 0)).toFixed(2);
+      return {
+        desc: "Asesor\xEDa \u2014 " + (p.tema || "") + (p.notas ? " \u2014 " + p.notas : ""),
+        alumno: p.alumnoNombre || "",
+        monto,
+        method: p.method || "cash",
+        tarjetaTipo: p.tarjetaTipo || null,
+        date: String(p.fechaISO || todayStr()).slice(0, 10),
+        cat: "Asesor\xEDa",
+        notas: p.notas || "",
+        comm: parseFloat(p.commMP) || 0,
+        ivaComm: 0,
+        totalDed: comm,
+        neto: +(monto - comm).toFixed(2),
+        mix: _mixDeP(p)
+      };
+    };
+    const nuevosA = pagos.filter((p) => !existentesIds.has(p.id)).map((p) => {
+      const f = _fmtAs(p);
+      return { id: uid(), autoSync: true, asesoriaPagoId: p.id, ...f, mesCorrespondiente: f.date.slice(0, 7), createdAt: (/* @__PURE__ */ new Date()).toISOString() };
+    });
+    const huerfanosA = existentes.filter((i) => !porId[i.asesoriaPagoId]);
+    const actualizadosA = {};
+    existentes.forEach((i) => {
+      const p = porId[i.asesoriaPagoId];
+      if (!p || i.editadoManual) return;
+      const f = _fmtAs(p);
+      if (i.monto === f.monto && i.method === f.method && i.date === f.date && i.alumno === f.alumno && i.desc === f.desc && i.totalDed === f.totalDed && (i.tarjetaTipo || null) === f.tarjetaTipo) return;
+      actualizadosA[i.id] = { ...i, ...f, mesCorrespondiente: f.date.slice(0, 7) };
+    });
+    if (nuevosA.length === 0 && huerfanosA.length === 0 && Object.keys(actualizadosA).length === 0) return;
+    const huerfIdsA = new Set(huerfanosA.map((i) => i.id));
+    const updA = [...ingresos.filter((i) => !huerfIdsA.has(i.id)).map((i) => actualizadosA[i.id] || i), ...nuevosA];
+    setIngresos(updA);
+    stor("set", "ingresos", updA);
+  }, [crmData, ingresos, loaded]);
   // Ingresos que el sync por folio no toca (editados a mano o sin folio) y que quedaron
   // con method "parcial:<m\xE9todo>": se guarda el m\xE9todo real y la marca de pago parcial.
   useEffect(() => {
@@ -5326,7 +5376,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.08-4"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.10.12-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -5362,7 +5412,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.10.08-4\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.10.12-1\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

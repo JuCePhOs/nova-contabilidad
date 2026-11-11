@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.11.11-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.11.11-2\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.11.11-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.11.11-2\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -201,7 +201,7 @@ const tcUSDoDef = () => tcUSD() || 18;
 function montoMXNOc(fe, fecha) { const m = montoOcurrencia(fe, fecha); return fe && fe.enDolares ? +(m * tcUSDoDef()).toFixed(2) : m; }
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.11.11-1";
+const BUILD_VERSION = "BUILD v2026.11.11-2";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -5318,7 +5318,7 @@ function calcAdeudosEmpleados(crmData, pagosGastos2, gastosFijos, comisionOverri
   const emps = {};
   const orden = [];
   const emp = (key, nombre, puesto) => {
-    if (!emps[key]) { emps[key] = { key, nombre: nombre || key, puesto: puesto || "", items: [], claves: [] }; orden.push(key); }
+    if (!emps[key]) { emps[key] = { key, nombre: nombre || key, puesto: puesto || "", items: [], pagados: [], claves: [] }; orden.push(key); }
     return emps[key];
   };
   const usuarios = ((crmData || {}).usuarios) || [];
@@ -5348,22 +5348,34 @@ function calcAdeudosEmpleados(crmData, pagosGastos2, gastosFijos, comisionOverri
   });
   _empExtras(cfg).forEach((x) => { const e = emp("x:" + x.id, x.nombre, x.puesto || ""); e.claves = (x.claves || []).map(_empNorm); });
   const add = (key, nombreFallback, it) => { const e = emps[key] || emp(key, nombreFallback, ""); e.items.push({ ...it, id: key + "|" + it.tipo + "|" + it.ref, vencido: !!it.vence && it.vence <= hoy }); };
+  // Lo que ya se le pagó de lo que tocaba pagar ESTE mes (para que la tabla no deje dudas).
+  const addPag = (key, nombreFallback, it) => { const e = emps[key] || emp(key, nombreFallback, ""); e.pagados.push({ ...it, id: key + "|pag|" + it.tipo + "|" + it.ref }); };
+  const fechaDe = (p) => String((p && (p.fecha || p.date)) || "").slice(0, 10);
   // ── Comisiones ──
   if (crmData) {
     let com = [];
     try { com = dividirComisionesPorPago(aplicarOverridesComisiones(calcComisiones(crmData), comisionOverrides || {}, usuarios, pagosGastos2 || [], crmData, retos || []), pagosGastos2 || []); } catch (e) { console.error("empleados/comisiones:", e); }
     com.forEach((c) => {
-      if (c.pagado || !(c.monto > 0) || !c.usuario || c.usuario === "sin_asignar") return;
+      if (!(c.monto > 0) || !c.usuario || c.usuario === "sin_asignar") return;
+      if (c.pagado) {
+        const vc = c.fechaPagoDefault || (nextMonth(c.mesGanado) + "-" + String(DIA_PAGO_COMISIONES).padStart(2, "0"));
+        if (String(vc).slice(0, 7) === mesHoy) addPag("u:" + c.usuario, c.nombreUsuario, { tipo: "comision", ref: c.mesGanado + "|" + (c.folios || []).join(","), mesRef: c.mesGanado, monto: +c.monto || 0, vence: vc, pagadoEl: fechaDe(c.pagado) });
+        return;
+      }
       if (!emps["u:" + c.usuario]) asegurarUsuario(c.usuario, c.nombreUsuario);
-      add("u:" + c.usuario, c.nombreUsuario, { tipo: "comision", ref: c.mesGanado + "|" + (c.folios || []).join(","), concepto: "Comisiones de " + mesLabelGlobal(c.mesGanado) + " (" + (c.count || (c.folios || []).length) + " contrato" + (((c.count || (c.folios || []).length) === 1) ? "" : "s") + ")", monto: +c.monto || 0, vence: c.fechaPagoDefault || (nextMonth(c.mesGanado) + "-" + String(DIA_PAGO_COMISIONES).padStart(2, "0")) });
+      add("u:" + c.usuario, c.nombreUsuario, { tipo: "comision", mesRef: c.mesGanado, ref: c.mesGanado + "|" + (c.folios || []).join(","), concepto: "Comisiones de " + mesLabelGlobal(c.mesGanado) + " (" + (c.count || (c.folios || []).length) + " contrato" + (((c.count || (c.folios || []).length) === 1) ? "" : "s") + ")", monto: +c.monto || 0, vence: c.fechaPagoDefault || (nextMonth(c.mesGanado) + "-" + String(DIA_PAGO_COMISIONES).padStart(2, "0")) });
     });
     // ── Bono dominical ──
     let bonos = [];
     try { bonos = calcBonosDominicales(crmData, pagosGastos2 || []); } catch (e) { console.error("empleados/bonos:", e); }
     bonos.forEach((b) => {
-      if (b.pagado || !(b.monto > 0) || !b.usuario) return;
+      if (!(b.monto > 0) || !b.usuario) return;
+      if (b.pagado) {
+        if (nextMonth(b.mesGanado) === mesHoy) addPag("u:" + b.usuario, b.nombreUsuario, { tipo: "bono", ref: b.mesGanado, mesRef: b.mesGanado, monto: +b.monto || 0, vence: nextMonth(b.mesGanado) + "-15", pagadoEl: fechaDe(b.pagado) });
+        return;
+      }
       if (!emps["u:" + b.usuario]) asegurarUsuario(b.usuario, b.nombreUsuario);
-      add("u:" + b.usuario, b.nombreUsuario, { tipo: "bono", ref: b.mesGanado, concepto: "Bono dominical de " + mesLabelGlobal(b.mesGanado) + " (" + b.dias + " domingo" + (b.dias === 1 ? "" : "s") + ")", monto: +b.monto || 0, vence: b.fechaPagoDefault || (nextMonth(b.mesGanado) + "-15") });
+      add("u:" + b.usuario, b.nombreUsuario, { tipo: "bono", ref: b.mesGanado, mesRef: b.mesGanado, concepto: "Bono dominical de " + mesLabelGlobal(b.mesGanado) + " (" + b.dias + " domingo" + (b.dias === 1 ? "" : "s") + ")", monto: +b.monto || 0, vence: b.fechaPagoDefault || (nextMonth(b.mesGanado) + "-15") });
     });
     // ── Horas de instructor (todo lo no liquidado, incluido el mes en curso) ──
     let ym = MES_INICIO_INSTR, guard = 0;
@@ -5372,9 +5384,10 @@ function calcAdeudosEmpleados(crmData, pagosGastos2, gastosFijos, comisionOverri
       try { filas = calcPagosInstructores(crmData, ym); } catch (e) { console.error("empleados/instructores:", e); }
       filas.forEach((r) => {
         const s = saldoInstr(pagosGastos2 || [], r, ym);
-        if (!(s.resta > 0)) return;
         const k = keyInstr[r.id] || ("i:" + r.id);
-        add(k, r.nombre, { tipo: "instr", ref: ym + "|" + r.id, concepto: "Horas de " + mesLabelGlobal(ym) + " (" + r.horas + " h)" + (s.parcial ? " — abonado " + fmt$(s.pagado) + " de " + fmt$(s.total) : ""), monto: s.resta, vence: nextMonth(ym) + "-" + String(DIA_PAGO_INSTRUCTORES).padStart(2, "0") });
+        if (s.pagado > 0 && nextMonth(ym) === mesHoy) addPag(k, r.nombre, { tipo: "instr", ref: ym + "|" + r.id, mesRef: ym, monto: s.pagado, vence: nextMonth(ym) + "-" + String(DIA_PAGO_INSTRUCTORES).padStart(2, "0"), pagadoEl: s.regs.length ? fechaDe(s.regs[s.regs.length - 1]) : "" });
+        if (!(s.resta > 0)) return;
+        add(k, r.nombre, { tipo: "instr", ref: ym + "|" + r.id, mesRef: ym, concepto: "Horas de " + mesLabelGlobal(ym) + " (" + r.horas + " h)" + (s.parcial ? " — abonado " + fmt$(s.pagado) + " de " + fmt$(s.total) : ""), monto: s.resta, vence: nextMonth(ym) + "-" + String(DIA_PAGO_INSTRUCTORES).padStart(2, "0") });
       });
       ym = nextMonth(ym);
     }
@@ -5411,7 +5424,8 @@ function calcAdeudosEmpleados(crmData, pagosGastos2, gastosFijos, comisionOverri
     for (let i = 0; i < 24; i++) { meses.unshift(m); m = prevMonth(m); if (m < ini) break; }
     meses.forEach((mr) => ocurrenciasGasto(fe, mr).forEach((fecha) => {
       if (skipped.has(fecha) || !ocurrenciaVigente(fe, fecha)) return;
-      if (pagoDeOcurrencia(fe, fecha, pagosGastos2 || [])) return;
+      const pg = pagoDeOcurrencia(fe, fecha, pagosGastos2 || []);
+      if (pg) { if (fecha.slice(0, 7) === mesHoy) addPag(k, "", { tipo: "sueldo", ref: fe.id + "|" + fecha, monto: parseFloat(pg.monto) || montoMXNOc(fe, fecha), vence: fecha, pagadoEl: fechaDe(pg) }); return; }
       add(k, "", { tipo: "sueldo", ref: fe.id + "|" + fecha, concepto: (fe.desc || "Sueldo") + " — " + fmtD(fecha), monto: montoMXNOc(fe, fecha), vence: fecha, gastoId: fe.id });
     }));
   });
@@ -5432,31 +5446,37 @@ function Empleados({ crmData, pagosGastos: pagosGastos2, gastosFijos, comisionOv
   const [abiertos, setAbiertos] = useState({});
   const [verCfg, setVerCfg] = useState(false);
   const [nuevoExtra, setNuevoExtra] = useState({ nombre: "", puesto: "" });
-  // Ficha activa como filtro: "todos" | "vencido" | "porvencer" | "fecha:AAAA-MM-DD"
-  const [filtro, setFiltro] = useState("todos");
+  const [filtro, setFiltro] = useState("todos"); // "todos" | "mes" | "atrasados"
   const [ocultarCero, setOcultarCero] = useState(() => { try { return localStorage.getItem("acad_v1_empOcultarCero") === "1"; } catch (e) { return false; } });
   const cambiarOcultar = (v) => { setOcultarCero(v); try { localStorage.setItem("acad_v1_empOcultarCero", v ? "1" : "0"); } catch (e) {} };
   const cfg = empleadosCfg || {};
   const data = useMemo(() => calcAdeudosEmpleados(crmData, pagosGastos2, gastosFijos, comisionOverrides, retos, cfg),
     [crmData, pagosGastos2, gastosFijos, comisionOverrides, retos, empleadosCfg]);
-  const TIPOS = [["sueldo", "Sueldo"], ["comision", "Comisiones"], ["bono", "Bono dominical"], ["instr", "Horas instructor"]];
-  const pasa = (it) => filtro === "todos" ? true
-    : filtro === "vencido" ? it.vencido
-    : filtro === "porvencer" ? !it.vencido
-    : filtro.indexOf("fecha:") === 0 ? it.vence === filtro.slice(6) : true;
-  const sumar = (items) => {
-    const por = { sueldo: 0, comision: 0, bono: 0, instr: 0 };
-    items.forEach((it) => { por[it.tipo] = +(por[it.tipo] + it.monto).toFixed(2); });
-    return { por, total: +items.reduce((s, it) => s + it.monto, 0).toFixed(2), vencido: +items.filter((it) => it.vencido).reduce((s, it) => s + it.monto, 0).toFixed(2) };
-  };
-  // Lista de empleados con sus conceptos que pasan el filtro.
-  const lista = data.lista.map((e) => { const items = e.items.filter(pasa); return { ...e, items, ...sumar(items) }; });
-  const visibles = lista.filter((e) => !ocultarCero || e.total > 0);
-  const todosItems = [];
-  data.lista.forEach((e) => e.items.forEach((it) => todosItems.push({ ...it, _emp: e })));
-  const itemsF = todosItems.filter(pasa);
+  const cm = mesReal();
+  const ini = cm + "-01";
+  const mesAnt = prevMonth(cm);
+  const nomMes = (ym) => { const n = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]; return n[parseInt(String(ym).slice(5, 7), 10) - 1] || ""; };
+  const dm = (f) => { const p = String(f || "").split("-"); return p.length === 3 ? p[2] + "/" + p[1] : "—"; };
+  const sum = (arr) => +arr.reduce((s, it) => s + (it.monto || 0), 0).toFixed(2);
+  const hoy = hoyRealStr();
+  // ── Por empleado: lo que toca pagar ESTE mes y lo atrasado de meses anteriores ──
+  const filas0 = data.lista.map((e) => {
+    const mes = e.items.filter((it) => String(it.vence).slice(0, 7) === cm);
+    const atr = e.items.filter((it) => String(it.vence) < ini);
+    const pag = (e.pagados || []).filter((it) => String(it.vence).slice(0, 7) === cm);
+    const sueldos = [...mes.filter((it) => it.tipo === "sueldo"), ...pag.filter((it) => it.tipo === "sueldo")].sort((a, b) => String(a.vence).localeCompare(String(b.vence)));
+    return { ...e, mes, atr, pag, sueldos, totMes: sum(mes), totAtr: sum(atr), totPag: sum(pag), totDebe: +(sum(mes) + sum(atr)).toFixed(2) };
+  });
+  const nSueldos = Math.max(1, ...filas0.map((e) => e.sueldos.length));
+  const filas = filas0.filter((e) => {
+    if (filtro === "mes" && !(e.totMes > 0)) return false;
+    if (filtro === "atrasados" && !(e.totAtr > 0)) return false;
+    if (ocultarCero && !(e.totDebe > 0)) return false;
+    return true;
+  });
+  // ── Selección: suma de las partes elegidas ──
   const porId = {}, nomDe = {};
-  todosItems.forEach((it) => { porId[it.id] = it; nomDe[it.id] = it._emp.nombre; });
+  filas0.forEach((e) => e.items.forEach((it) => { porId[it.id] = it; nomDe[it.id] = e.nombre; }));
   const selIds = Object.keys(sel).filter((id) => sel[id] && porId[id]);
   const sumaSel = +selIds.reduce((s, id) => s + porId[id].monto, 0).toFixed(2);
   const empsSel = [...new Set(selIds.map((id) => nomDe[id]))];
@@ -5469,66 +5489,84 @@ function Empleados({ crmData, pagosGastos: pagosGastos2, gastosFijos, comisionOv
     onClick: (ev) => ev.stopPropagation(),
     style: { width: 16, height: 16, margin: 0, cursor: ids.length ? "pointer" : "default", flexShrink: 0 }
   });
-  // Totales de las fichas: siempre sobre TODO lo que se debe (no cambian al filtrar).
-  const totGen = +todosItems.reduce((s, it) => s + it.monto, 0).toFixed(2);
-  const totVenc = +todosItems.filter((it) => it.vencido).reduce((s, it) => s + it.monto, 0).toFixed(2);
-  // ── Agrupado por fecha de pago (la fecha en que se le paga cada concepto) ──
-  const fechas = {};
-  itemsF.forEach((it) => { (fechas[it.vence || "sin-fecha"] = fechas[it.vence || "sin-fecha"] || []).push(it); });
-  const fechasOrden = Object.keys(fechas).sort();
-  const fechasTodas = [...new Set(todosItems.map((it) => it.vence || "sin-fecha"))].sort();
-  const hoy = hoyRealStr();
-  async function guardarCfg(n) { setEmpleadosCfg(n); try { await stor("set", "empleadosCfg", n); } catch (e) { console.error("empleadosCfg:", e); } }
-  const th = (t, right) => React.createElement("th", { style: { textAlign: right ? "right" : "left", padding: "9px 10px", fontSize: 11, color: "var(--tx3)", textTransform: "uppercase", letterSpacing: ".4px", whiteSpace: "nowrap" } }, t);
-  const celda = (items, t, key) => {
-    const its = items.filter((it) => it.tipo === t);
-    const ids = its.map((it) => it.id);
-    const v = +its.reduce((s, it) => s + it.monto, 0).toFixed(2);
+  // Celda de un concepto del mes: lo pendiente (con su fecha de pago) y lo ya pagado.
+  const celda = (key, pend, pagados, opts) => {
+    const ids = pend.map((it) => it.id);
     const st = estado(ids);
+    const vP = sum(pend), vG = sum(pagados);
+    const venc = pend.some((it) => it.vence < hoy);
+    const fechaP = pend.length ? pend[0].vence : (pagados[0] && pagados[0].vence);
+    const kids = [];
+    if (vP > 0) {
+      kids.push(React.createElement("div", { key: "p", style: { fontWeight: 700, color: (opts && opts.color) || (venc ? "var(--rd)" : "var(--tx)") } }, disp(vP)));
+      if (!(opts && opts.sinFecha)) kids.push(React.createElement("div", { key: "f", style: { fontSize: 10, color: venc ? "var(--rd)" : "var(--tx3)" } }, (venc ? "venci\xF3 " : "paga ") + dm(fechaP)));
+    }
+    if (vG > 0) kids.push(React.createElement("div", { key: "g", style: { fontSize: vP > 0 ? 10 : 12, fontWeight: vP > 0 ? 600 : 700, color: "var(--gr)" } }, "✓ " + (vP > 0 ? "pagado " : "") + disp(vG) + (vP > 0 ? "" : ""), vP > 0 ? null : React.createElement("div", { style: { fontSize: 10, fontWeight: 400 } }, "pagado " + dm((pagados[pagados.length - 1] || {}).pagadoEl || fechaP))));
     return React.createElement("td", {
-      key, className: "mono",
+      key, className: "mono emp-c-" + key,
       onClick: ids.length ? () => toggleIds(ids, st !== "all") : undefined,
-      title: ids.length ? "Clic para seleccionar / quitar esta parte" : "",
-      style: { textAlign: "right", padding: "9px 10px", cursor: ids.length ? "pointer" : "default", color: v > 0 ? "var(--tx)" : "var(--tx3)", background: st === "all" ? "rgba(155,114,248,.18)" : st === "some" ? "rgba(155,114,248,.08)" : "transparent", whiteSpace: "nowrap" }
-    }, v > 0 ? disp(v) : "—");
+      title: ids.length ? "Clic para seleccionar / quitar" : "",
+      style: { textAlign: "right", padding: "8px 10px", cursor: ids.length ? "pointer" : "default", whiteSpace: "nowrap", verticalAlign: "top", background: st === "all" ? "rgba(155,114,248,.18)" : st === "some" ? "rgba(155,114,248,.08)" : "transparent" }
+    }, kids.length ? kids : React.createElement("span", { style: { color: "var(--tx3)" } }, "—"));
   };
-  const tabla = (filasEmp, keyPre, conDetalle) => {
-    const filas = [];
-    filasEmp.forEach((e) => {
-      const ids = e.items.map((it) => it.id);
-      const kAb = keyPre + "|" + e.key;
-      const ab = conDetalle && !!abiertos[kAb];
-      const s = sumar(e.items);
-      filas.push(React.createElement("tr", { key: kAb, className: "emp-row", "data-emp": e.key, style: { borderTop: "1px solid var(--br)" } },
-        React.createElement("td", { style: { padding: "9px 10px", width: 28, textAlign: "left" } }, chk(ids, "Seleccionar todo lo de " + e.nombre)),
-        React.createElement("td", { style: { padding: "9px 10px", cursor: e.items.length ? "pointer" : "default" }, onClick: () => e.items.length && setAbiertos((a) => ({ ...a, [kAb]: !a[kAb] })) },
-          React.createElement("div", { style: { fontWeight: 600 } }, (conDetalle && e.items.length ? (ab ? "▾ " : "▸ ") : "") + e.nombre),
-          React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)" } }, e.puesto || "—")),
-        ...TIPOS.map(([t]) => celda(e.items, t, t)),
-        React.createElement("td", { className: "mono", style: { textAlign: "right", padding: "9px 10px", fontWeight: 700, color: s.total > 0 ? (s.vencido > 0 ? "var(--rd)" : "#f59e0b") : "var(--gr)", whiteSpace: "nowrap" } },
-          s.total > 0 ? disp(s.total) : "$0",
-          s.vencido > 0 && s.vencido < s.total ? React.createElement("div", { style: { fontSize: 10, fontWeight: 600, color: "var(--rd)" } }, "vencido " + disp(s.vencido)) : null)));
-      if (ab && e.items.length) filas.push(React.createElement("tr", { key: kAb + "-det" },
-        React.createElement("td", { colSpan: 7, style: { padding: "0 10px 10px 38px", background: "var(--s2)" } },
-          e.items.map((it) => React.createElement("label", { key: it.id, className: "emp-item", style: { display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px dashed var(--br)", fontSize: 12, cursor: "pointer", justifyContent: "flex-start" } },
-            chk([it.id], "Seleccionar"),
-            React.createElement("span", { style: { flex: 1 } }, it.concepto,
-              React.createElement("span", { style: { color: it.vencido ? "var(--rd)" : "var(--tx3)", marginLeft: 8, fontSize: 11 } }, (it.vencido ? "⚠️ venci\xF3 el " : "se paga el ") + fmtD(it.vence))),
-            React.createElement("span", { className: "mono", style: { fontWeight: 700 } }, disp(it.monto)))))));
-    });
-    const tot = sumar([].concat(...filasEmp.map((e) => e.items)));
-    const idsTodos = [].concat(...filasEmp.map((e) => e.items.map((it) => it.id)));
-    return React.createElement("div", { className: "card", style: { padding: 0, overflowX: "auto", marginBottom: 14 } },
-      React.createElement("table", { className: "emp-tabla", style: { width: "100%", borderCollapse: "collapse", fontSize: 13 } },
-        React.createElement("thead", null, React.createElement("tr", null,
-          React.createElement("th", { style: { padding: "9px 10px", width: 28, textAlign: "left" } }, chk(idsTodos, "Seleccionar todo")),
-          th("Empleado"), ...TIPOS.map(([, l]) => th(l, true)), th("Total", true))),
-        React.createElement("tbody", null, filas.length ? filas : React.createElement("tr", null, React.createElement("td", { colSpan: 7, style: { padding: 20, textAlign: "center", color: "var(--tx3)" } }, "Sin empleados con pagos aqu\xED"))),
-        React.createElement("tfoot", null, React.createElement("tr", { style: { borderTop: "2px solid var(--br)", fontWeight: 700, background: "var(--s2)" } },
-          React.createElement("td", null), React.createElement("td", { style: { padding: "9px 10px" } }, "TOTAL"),
-          ...TIPOS.map(([t]) => React.createElement("td", { key: t, className: "mono", style: { textAlign: "right", padding: "9px 10px", whiteSpace: "nowrap" } }, disp(tot.por[t]))),
-          React.createElement("td", { className: "mono emp-tabla-total", style: { textAlign: "right", padding: "9px 10px", whiteSpace: "nowrap" } }, disp(tot.total))))));
+  const TH = (t, sub, key, extra) => React.createElement("th", { key, style: { textAlign: "right", padding: "9px 10px", fontSize: 11, color: "var(--tx3)", textTransform: "uppercase", letterSpacing: ".3px", verticalAlign: "bottom", ...(extra || {}) } },
+    t, sub ? React.createElement("div", { style: { fontSize: 10, textTransform: "none", letterSpacing: 0, color: "var(--tx3)", fontWeight: 500 } }, sub) : null);
+  const colsMes = [
+    ...Array.from({ length: nSueldos }, (_, i) => ({ key: "s" + i, t: nSueldos > 1 ? "Sueldo " + (i + 1) : "Sueldo", sub: "fecha de pago en la celda", get: (e) => { const it = e.sueldos[i]; return it ? [it] : []; } })),
+    { key: "com", t: "Comisiones de " + nomMes(mesAnt), sub: "paga " + DIA_PAGO_COMISIONES + "/" + cm.slice(5, 7), tipo: "comision" },
+    { key: "bono", t: "Bono dominical de " + nomMes(mesAnt), sub: "paga 15/" + cm.slice(5, 7), tipo: "bono" },
+    { key: "instr", t: "Horas de " + nomMes(mesAnt), sub: "paga " + DIA_PAGO_INSTRUCTORES + "/" + cm.slice(5, 7), tipo: "instr" }
+  ];
+  const partes = (e, c) => {
+    if (c.get) { const its = c.get(e); return { pend: its.filter((it) => !e.pag.includes(it)), pag: its.filter((it) => e.pag.includes(it)) }; }
+    return { pend: e.mes.filter((it) => it.tipo === c.tipo), pag: e.pag.filter((it) => it.tipo === c.tipo) };
   };
+  const nCols = 2 + colsMes.length + 3;
+  const filasHtml = [];
+  filas.forEach((e) => {
+    const ab = !!abiertos[e.key];
+    const idsTodo = [...e.mes, ...e.atr].map((it) => it.id);
+    const tieneDet = e.mes.length + e.atr.length + e.pag.length > 0;
+    filasHtml.push(React.createElement("tr", { key: e.key, className: "emp-row", "data-emp": e.key, style: { borderTop: "1px solid var(--br)" } },
+      React.createElement("td", { style: { padding: "8px 10px", width: 28, textAlign: "left", verticalAlign: "top" } }, chk(idsTodo, "Seleccionar todo lo que se le debe a " + e.nombre)),
+      React.createElement("td", { style: { padding: "8px 10px", cursor: tieneDet ? "pointer" : "default", verticalAlign: "top" }, onClick: () => tieneDet && setAbiertos((a) => ({ ...a, [e.key]: !a[e.key] })), title: tieneDet ? "Ver detalle" : "" },
+        React.createElement("div", { style: { fontWeight: 600 } }, (tieneDet ? (ab ? "▾ " : "▸ ") : "") + e.nombre),
+        React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)" } }, e.puesto || "—")),
+      ...colsMes.map((c) => { const p = partes(e, c); return celda(c.key, p.pend, p.pag); }),
+      React.createElement("td", { key: "tm", className: "mono emp-c-mes", style: { textAlign: "right", padding: "8px 10px", whiteSpace: "nowrap", verticalAlign: "top", borderLeft: "2px solid var(--br)", fontWeight: 700, color: e.totMes > 0 ? "var(--tx)" : "var(--tx3)" } },
+        e.totMes > 0 ? disp(e.totMes) : "—",
+        e.totPag > 0 ? React.createElement("div", { style: { fontSize: 10, fontWeight: 600, color: "var(--gr)" } }, "✓ ya pagado " + disp(e.totPag)) : null),
+      (function () { const ids = e.atr.map((it) => it.id); const st = estado(ids); return React.createElement("td", { key: "ta", className: "mono emp-c-atr", onClick: ids.length ? () => toggleIds(ids, st !== "all") : undefined, title: ids.length ? "Clic para seleccionar / quitar" : "",
+        style: { textAlign: "right", padding: "8px 10px", whiteSpace: "nowrap", verticalAlign: "top", cursor: ids.length ? "pointer" : "default", fontWeight: 700, color: e.totAtr > 0 ? "var(--rd)" : "var(--tx3)", background: st === "all" ? "rgba(155,114,248,.18)" : st === "some" ? "rgba(155,114,248,.08)" : "transparent" } },
+        e.totAtr > 0 ? disp(e.totAtr) : "—",
+        e.totAtr > 0 ? React.createElement("div", { style: { fontSize: 10, fontWeight: 500 } }, e.atr.length + " pago" + (e.atr.length === 1 ? "" : "s") + " desde " + dm(e.atr.map((it) => it.vence).sort()[0])) : null); })(),
+      React.createElement("td", { key: "td", className: "mono emp-c-debe", style: { textAlign: "right", padding: "8px 10px", whiteSpace: "nowrap", verticalAlign: "top", fontWeight: 800, fontSize: 14, color: e.totDebe > 0 ? (e.totAtr > 0 ? "var(--rd)" : "#f59e0b") : "var(--gr)" } },
+        e.totDebe > 0 ? disp(e.totDebe) : "$0",
+        e.totAtr > 0 && e.totMes > 0 ? React.createElement("div", { style: { fontSize: 10, fontWeight: 500, color: "var(--tx3)" } }, "mes " + disp(e.totMes) + " + atrasado " + disp(e.totAtr)) : null)));
+    if (ab && tieneDet) {
+      const linea = (it, tipoL) => React.createElement("label", { key: it.id, className: "emp-item", style: { display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderBottom: "1px dashed var(--br)", fontSize: 12, cursor: tipoL === "pag" ? "default" : "pointer", justifyContent: "flex-start" } },
+        tipoL === "pag" ? React.createElement("span", { style: { width: 16, textAlign: "center", color: "var(--gr)" } }, "✓") : chk([it.id], "Seleccionar"),
+        React.createElement("span", { style: { flex: 1 } }, it.concepto || ({ sueldo: "Sueldo", comision: "Comisiones de " + nomMes(it.mesRef), bono: "Bono dominical de " + nomMes(it.mesRef), instr: "Horas de " + nomMes(it.mesRef) })[it.tipo],
+          React.createElement("span", { style: { marginLeft: 8, fontSize: 11, color: tipoL === "pag" ? "var(--gr)" : it.vence < hoy ? "var(--rd)" : "var(--tx3)" } },
+            tipoL === "pag" ? "pagado el " + fmtD(it.pagadoEl || it.vence) : (it.vence < hoy ? "debi\xF3 pagarse el " : "se paga el ") + fmtD(it.vence))),
+        React.createElement("span", { className: "mono", style: { fontWeight: 700, color: tipoL === "pag" ? "var(--gr)" : tipoL === "atr" ? "var(--rd)" : "var(--tx)" } }, disp(it.monto)));
+      const bloque = (tit, arr, tipoL) => arr.length ? React.createElement("div", { key: tipoL, style: { marginTop: 6 } },
+        React.createElement("div", { style: { fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".4px", color: tipoL === "atr" ? "var(--rd)" : tipoL === "pag" ? "var(--gr)" : "var(--tx2)" } }, tit + " \xB7 " + disp(sum(arr))),
+        arr.slice().sort((a, b) => String(a.vence).localeCompare(String(b.vence))).map((it) => linea(it, tipoL))) : null;
+      filasHtml.push(React.createElement("tr", { key: e.key + "-det" },
+        React.createElement("td", { colSpan: nCols, style: { padding: "0 10px 10px 38px", background: "var(--s2)" } },
+          bloque("Atrasados (meses anteriores)", e.atr, "atr"),
+          bloque("Por pagar en " + nomMes(cm), e.mes, "mes"),
+          bloque("Ya pagado en " + nomMes(cm), e.pag, "pag"))));
+    }
+  });
+  const totCol = (c) => { let p = 0, g = 0; filas.forEach((e) => { const x = partes(e, c); p += sum(x.pend); g += sum(x.pag); }); return { p: +p.toFixed(2), g: +g.toFixed(2) }; };
+  const totMes = +filas.reduce((s, e) => s + e.totMes, 0).toFixed(2);
+  const totAtr = +filas.reduce((s, e) => s + e.totAtr, 0).toFixed(2);
+  const totPag = +filas.reduce((s, e) => s + e.totPag, 0).toFixed(2);
+  const gMes = +filas0.reduce((s, e) => s + e.totMes, 0).toFixed(2);
+  const gAtr = +filas0.reduce((s, e) => s + e.totAtr, 0).toFixed(2);
+  async function guardarCfg(n) { setEmpleadosCfg(n); try { await stor("set", "empleadosCfg", n); } catch (e) { console.error("empleadosCfg:", e); } }
   // ── Configuración: asignar gastos de sueldo y empleados sin usuario ──
   const opcionesEmp = data.lista.filter((e) => e.key !== "sin:sueldos");
   const candidatos = (gastosFijos || []).filter((fe) => fe && fe.active && (fe.cat === "Salarios" || _EMP_RX_SUELDO.test(_empNorm(fe.desc)) || (cfg.asignaSueldo || {})[fe.id] || data.sueldoDe[fe.id]));
@@ -5560,65 +5598,50 @@ function Empleados({ crmData, pagosGastos: pagosGastos2, gastosFijos, comisionOv
       React.createElement("input", { placeholder: "Nombre", value: nuevoExtra.nombre, onChange: (ev) => setNuevoExtra({ ...nuevoExtra, nombre: ev.target.value }), style: { flex: "1 1 160px" } }),
       React.createElement("input", { placeholder: "Puesto (opcional)", value: nuevoExtra.puesto, onChange: (ev) => setNuevoExtra({ ...nuevoExtra, puesto: ev.target.value }), style: { flex: "1 1 140px" } }),
       React.createElement("button", { className: "btn btn-g btn-sm", disabled: !nuevoExtra.nombre.trim(), onClick: () => { const nom = nuevoExtra.nombre.trim(); if (!nom) return; guardarCfg({ ...cfg, extras: [...extras, { id: uid(), nombre: nom, puesto: nuevoExtra.puesto.trim(), claves: [_empNorm(nom).split(" ")[0]] }] }); setNuevoExtra({ nombre: "", puesto: "" }); } }, "+ Agregar")));
-  // ── Fichas: también son filtros (clic para filtrar, otro clic para quitar) ──
+  // ── Fichas = filtros ──
   const ficha = (id, l, v, c, s) => {
     const act = filtro === id;
-    return React.createElement("div", {
-      key: id, className: "card emp-ficha" + (act ? " emp-ficha-act" : ""), "data-filtro": id,
-      onClick: () => setFiltro(act || id === "todos" ? "todos" : id),
-      title: act && id !== "todos" ? "Clic para quitar el filtro" : "Clic para filtrar",
-      style: { flex: "1 1 170px", padding: "12px 14px", cursor: "pointer", marginBottom: 0, border: act ? "2px solid var(--pu)" : undefined, boxShadow: act ? "0 0 0 3px rgba(155,114,248,.15)" : undefined }
-    },
-      React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", textTransform: "uppercase", letterSpacing: ".4px", display: "flex", justifyContent: "space-between", gap: 6 } }, l, act && id !== "todos" ? React.createElement("span", { style: { color: "var(--pu)", fontWeight: 700 } }, "✕") : null),
+    return React.createElement("div", { key: id, className: "card emp-ficha" + (act ? " emp-ficha-act" : ""), "data-filtro": id,
+      onClick: () => setFiltro(act || id === "todos" ? "todos" : id), title: act && id !== "todos" ? "Clic para quitar el filtro" : "Clic para filtrar",
+      style: { flex: "1 1 180px", padding: "12px 14px", cursor: "pointer", marginBottom: 0, border: act ? "2px solid var(--pu)" : undefined } },
+      React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", textTransform: "uppercase", letterSpacing: ".4px", display: "flex", justifyContent: "space-between" } }, l, act && id !== "todos" ? React.createElement("span", { style: { color: "var(--pu)", fontWeight: 700 } }, "✕") : null),
       React.createElement("div", { className: "mono", style: { fontSize: 20, fontWeight: 800, color: c, marginTop: 4 } }, v),
-      s ? React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 2 } }, s) : null);
+      React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)", marginTop: 2 } }, s));
   };
-  const montoFecha = (f) => +todosItems.filter((it) => (it.vence || "sin-fecha") === f).reduce((s, it) => s + it.monto, 0).toFixed(2);
-  const lblFecha = (f) => f === "sin-fecha" ? "Sin fecha" : fmtDiaFecha(f);
-  const etiquetaFiltro = filtro === "vencido" ? "Ya vencido" : filtro === "porvencer" ? "Por vencer" : filtro.indexOf("fecha:") === 0 ? "Pago del " + lblFecha(filtro.slice(6)) : "";
   return React.createElement("div", { className: "emp-tab", style: { paddingBottom: selIds.length ? 80 : 0 } },
     React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
-      React.createElement("div", null,
-        React.createElement("div", { style: { fontSize: 20, fontWeight: 800 } }, "\u{1F465} Empleados"),
-        React.createElement("div", { style: { fontSize: 12, color: "var(--tx3)", marginTop: 2 } }, "Lo que se le debe hoy a cada persona: sueldo, comisiones, bono dominical y horas de instructor que a\xFAn no se pagan (incluye abonos parciales), separado por la fecha en que se paga. Los pagos se registran en Gastos y Comisiones.")),
-      React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" } },
+      React.createElement("div", { style: { fontSize: 20, fontWeight: 800 } }, "\u{1F465} Empleados — " + nomMes(cm) + " " + cm.slice(0, 4)),
+      React.createElement("div", { style: { display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" } },
         React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer", justifyContent: "flex-start" } },
           React.createElement("input", { type: "checkbox", className: "emp-ocultar", checked: ocultarCero, onChange: (ev) => cambiarOcultar(ev.target.checked), style: { width: 16, height: 16, margin: 0 } }),
           "Ocultar empleados sin pago"),
         React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setVerCfg(!verCfg) }, verCfg ? "✕ Cerrar configuraci\xF3n" : "⚙️ Configurar"))),
     panelCfg,
-    React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 } },
-      ficha("todos", "Total que se debe", disp(totGen), totGen > 0 ? "#f59e0b" : "var(--gr)", data.lista.filter((e) => e.total > 0).length + " empleado(s) con saldo"),
-      ficha("vencido", "Ya vencido", disp(totVenc), totVenc > 0 ? "var(--rd)" : "var(--gr)", "Debi\xF3 pagarse ya"),
-      ficha("porvencer", "Por vencer", disp(+(totGen - totVenc).toFixed(2)), "var(--tx2)", "Generado, a\xFAn no toca pagarse")),
-    fechasTodas.length > 0 && React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 } },
-      fechasTodas.map((f) => {
-        const id = "fecha:" + f, act = filtro === id, venc = f !== "sin-fecha" && f <= hoy;
-        return React.createElement("div", { key: id, className: "emp-ficha emp-ficha-fecha" + (act ? " emp-ficha-act" : ""), "data-filtro": id, onClick: () => setFiltro(act ? "todos" : id), title: act ? "Clic para quitar el filtro" : "Clic para ver solo este pago",
-          style: { cursor: "pointer", borderRadius: 10, padding: "8px 12px", background: act ? "rgba(155,114,248,.15)" : "var(--s1)", border: "2px solid " + (act ? "var(--pu)" : venc ? "rgba(244,107,107,.45)" : "var(--br)") } },
-          React.createElement("div", { style: { fontSize: 10, color: venc ? "var(--rd)" : "var(--tx3)", textTransform: "uppercase", letterSpacing: ".4px", fontWeight: 700 } }, (venc ? "⚠️ " : "\u{1F4C5} ") + lblFecha(f) + (act ? "  ✕" : "")),
-          React.createElement("div", { className: "mono", style: { fontSize: 14, fontWeight: 800, marginTop: 2 } }, disp(montoFecha(f))));
-      })),
-    etiquetaFiltro && React.createElement("div", { className: "emp-filtro-act", style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 10, fontSize: 12, color: "var(--pu)", fontWeight: 700 } },
-      "Filtro: " + etiquetaFiltro,
-      React.createElement("button", { className: "btn btn-o btn-sm", onClick: () => setFiltro("todos") }, "✕ Quitar filtro")),
-    React.createElement("div", { className: "sec-hdr" }, React.createElement("div", { className: "sec-ttl" }, "\u{1F4CB} Resumen por empleado")),
-    tabla(visibles, "res", true),
-    React.createElement("div", { className: "sec-hdr", style: { marginTop: 18 } }, React.createElement("div", { className: "sec-ttl" }, "\u{1F4C5} Por fecha de pago")),
-    fechasOrden.length === 0 && React.createElement("div", { style: { border: "1px dashed var(--br)", borderRadius: 10, padding: "18px 14px", textAlign: "center", color: "var(--tx3)", fontSize: 12 } }, "No hay pagos pendientes con este filtro"),
-    fechasOrden.map((f) => {
-      const its = fechas[f];
-      const empKeys = [];
-      its.forEach((it) => { if (empKeys.indexOf(it._emp.key) < 0) empKeys.push(it._emp.key); });
-      const filasEmp = empKeys.map((k) => { const e = data.lista.find((x) => x.key === k); return { ...e, items: its.filter((it) => it._emp.key === k) }; });
-      const venc = f !== "sin-fecha" && f <= hoy;
-      const tot = +its.reduce((s, it) => s + it.monto, 0).toFixed(2);
-      return React.createElement("div", { key: "f-" + f, className: "emp-fecha", "data-fecha": f },
-        React.createElement("div", { style: { borderLeft: "3px solid " + (venc ? "var(--rd)" : "var(--ac)"), paddingLeft: 10, margin: "8px 0", fontSize: 12, fontWeight: 700, color: "var(--tx2)", textTransform: "uppercase", letterSpacing: ".4px", display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" } },
-          React.createElement("span", null, (venc ? "⚠️ Debi\xF3 pagarse el " : "\u{1F4C5} Se paga el ") + lblFecha(f)),
-          React.createElement("span", { className: "mono", style: { color: venc ? "var(--rd)" : "var(--tx)" } }, disp(tot))),
-        tabla(filasEmp, "f" + f, true));
-    }),
+    React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 } },
+      ficha("mes", "Por pagar en " + nomMes(cm), disp(gMes), "var(--tx)", "Pagos que tocan este mes"),
+      ficha("atrasados", "Atrasados", disp(gAtr), gAtr > 0 ? "var(--rd)" : "var(--gr)", "De meses anteriores, sin pagar"),
+      ficha("todos", "Total que se debe", disp(+(gMes + gAtr).toFixed(2)), "#f59e0b", "Del mes + atrasados")),
+    React.createElement("div", { className: "card", style: { padding: 0, overflowX: "auto" } },
+      React.createElement("table", { className: "emp-tabla", style: { width: "100%", borderCollapse: "collapse", fontSize: 13 } },
+        React.createElement("thead", null,
+          React.createElement("tr", null,
+            React.createElement("th", { colSpan: 2 }),
+            React.createElement("th", { colSpan: colsMes.length + 1, style: { textAlign: "center", fontSize: 11, padding: "8px 10px 0", color: "var(--tx2)", textTransform: "uppercase", letterSpacing: ".5px", borderBottom: "1px solid var(--br)" } }, "Pagos de " + nomMes(cm)),
+            React.createElement("th", { colSpan: 2 })),
+          React.createElement("tr", null,
+            React.createElement("th", { style: { padding: "9px 10px", width: 28, textAlign: "left", verticalAlign: "bottom" } }, chk(filas.reduce((a, e) => a.concat([...e.mes, ...e.atr].map((it) => it.id)), []), "Seleccionar todo")),
+            React.createElement("th", { style: { textAlign: "left", padding: "9px 10px", fontSize: 11, color: "var(--tx3)", textTransform: "uppercase", letterSpacing: ".3px", verticalAlign: "bottom" } }, "Empleado"),
+            ...colsMes.map((c) => TH(c.t, c.sub, c.key)),
+            TH("Total del mes", "por pagar", "tm", { borderLeft: "2px solid var(--br)" }),
+            TH("Atrasados", "meses anteriores", "ta", { color: "var(--rd)" }),
+            TH("Total que se debe", "mes + atrasados", "td"))),
+        React.createElement("tbody", null, filasHtml.length ? filasHtml : React.createElement("tr", null, React.createElement("td", { colSpan: nCols, style: { padding: 20, textAlign: "center", color: "var(--tx3)" } }, "Sin empleados"))),
+        React.createElement("tfoot", null, React.createElement("tr", { style: { borderTop: "2px solid var(--br)", fontWeight: 700, background: "var(--s2)" } },
+          React.createElement("td", null), React.createElement("td", { style: { padding: "9px 10px" } }, "TOTAL"),
+          ...colsMes.map((c) => { const t = totCol(c); return React.createElement("td", { key: c.key, className: "mono", style: { textAlign: "right", padding: "9px 10px", whiteSpace: "nowrap", verticalAlign: "top" } }, t.p > 0 ? disp(t.p) : "—", t.g > 0 ? React.createElement("div", { style: { fontSize: 10, color: "var(--gr)" } }, "✓ " + disp(t.g)) : null); }),
+          React.createElement("td", { className: "mono emp-t-mes", style: { textAlign: "right", padding: "9px 10px", whiteSpace: "nowrap", borderLeft: "2px solid var(--br)", verticalAlign: "top" } }, disp(totMes), totPag > 0 ? React.createElement("div", { style: { fontSize: 10, color: "var(--gr)" } }, "✓ ya pagado " + disp(totPag)) : null),
+          React.createElement("td", { className: "mono emp-t-atr", style: { textAlign: "right", padding: "9px 10px", whiteSpace: "nowrap", color: "var(--rd)", verticalAlign: "top" } }, disp(totAtr)),
+          React.createElement("td", { className: "mono emp-t-debe", style: { textAlign: "right", padding: "9px 10px", whiteSpace: "nowrap", verticalAlign: "top" } }, disp(+(totMes + totAtr).toFixed(2))))))),
     selIds.length > 0 && React.createElement("div", { className: "emp-suma", style: { position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 18, zIndex: 50, background: "var(--s1)", border: "2px solid var(--pu)", borderRadius: 12, padding: "10px 16px", display: "flex", alignItems: "center", gap: 14, boxShadow: "0 8px 30px rgba(0,0,0,.35)", maxWidth: "calc(100vw - 32px)", flexWrap: "wrap" } },
       React.createElement("div", null,
         React.createElement("div", { style: { fontSize: 11, color: "var(--tx3)" } }, "Suma de lo seleccionado \xB7 " + selIds.length + " concepto" + (selIds.length === 1 ? "" : "s") + " \xB7 " + empsSel.length + " empleado" + (empsSel.length === 1 ? "" : "s")),
@@ -6400,7 +6423,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.11.11-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.11.11-2"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -6437,7 +6460,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.11.11-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.11.11-2\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",

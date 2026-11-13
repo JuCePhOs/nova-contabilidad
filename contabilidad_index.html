@@ -14,7 +14,7 @@
     var msg = (e.error && e.error.message) || e.message || 'Error desconocido';
     var stk = (e.error && e.error.stack) || '';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error al cargar la aplicación — BUILD v2026.11.12-1\n\n'
+      + '⚠ Error al cargar la aplicación — BUILD v2026.11.12-3\n\n'
       + msg + '\n\n'
       + (e.filename ? ('Archivo: '+e.filename+(e.lineno?(' (línea '+e.lineno+')'):'')) : '')
       + (stk ? ('\n\n'+stk) : '')
@@ -25,7 +25,7 @@
     if(!root) return;
     var msg = (e.reason && e.reason.message) || String(e.reason) || 'Error desconocido';
     root.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;color:#fca5a5;background:#1a0e0e;white-space:pre-wrap;line-height:1.6">'
-      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.11.12-1\n\n' + msg
+      + '⚠ Error (promesa) al cargar la aplicación — BUILD v2026.11.12-3\n\n' + msg
       + '\n\nToma una captura de esto y compártela.</div>';
   });
   function cdnError(name){
@@ -201,7 +201,7 @@ const tcUSDoDef = () => tcUSD() || 18;
 function montoMXNOc(fe, fecha) { const m = montoOcurrencia(fe, fecha); return fe && fe.enDolares ? +(m * tcUSDoDef()).toFixed(2) : m; }
 const fmtMoney = (n, cur, rate) => cur === "USD" && rate ? fmtUSD((n || 0) / rate) + " (\u2248" + fmt$(n) + ")" : fmt$(n);
 const fmtD = (s) => s ? (/* @__PURE__ */ new Date(s + "T12:00:00")).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }) : "\u2014";
-const BUILD_VERSION = "BUILD v2026.11.12-1";
+const BUILD_VERSION = "BUILD v2026.11.12-3";
 const hoyRealStr = () => { const d = /* @__PURE__ */ new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 // MES DE TRABAJO GLOBAL. Toda la app se comporta como si "hoy" fuera ese mes: al elegir
 // uno anterior, todayStr() devuelve su último día, así que vencimientos, comisiones,
@@ -5189,6 +5189,11 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
     const n = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
     return `${n[parseInt(m) - 1]} ${y}`;
   };
+  // Mes en que cada folio es CONTRATO NUEVO (mismo criterio que comisiones y "Nuevos").
+  // El pronóstico es lo MÍNIMO que se espera recibir: solo pagos regulares de contratos
+  // que ya existían. Los contratos nuevos del mes son el extra y no se pronostican.
+  const _mesNuevoMap = useMemo(() => { try { return mesNuevoPorFolio(crmData) || {}; } catch (e) { return {}; } }, [crmData]);
+  const nuevosDelMes = (ym) => ((crmData && crmData["matr\u00EDculas"]) || []).filter((m2) => m2 && m2.folio != null && _mesNuevoMap[String(m2.folio)] === ym);
   const alumnosActivosEnMes = useCallback((ym, mats2, cursos2) => {
     if (!mats2 || !cursos2) return [];
     const [y, m] = ym.split("-").map(Number);
@@ -5197,6 +5202,8 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
     return mats2.filter((mat) => {
       // Pausa académica en ese mes: no se recibe pago, no cuenta en el pronóstico.
       if ((Array.isArray(mat.pausasPago) ? mat.pausasPago : []).indexOf(ym) >= 0) return false;
+      // Contrato nuevo de ese mes: no es pago regular, no se pronostica.
+      if (_mesNuevoMap[String(mat.folio)] === ym) return false;
       // Pago único = un solo cobro en el mes de inscripción, no recurrente
       // Solo contar en el pronóstico del mes en que se registró
       if (mat.pagoTipo === "unico") {
@@ -5212,7 +5219,7 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
       if (fin && fin < mesStart) return false;
       return true;
     });
-  }, [crmData]);
+  }, [crmData, _mesNuevoMap]);
   const mats = (crmData == null ? void 0 : crmData.matr\u00EDculas) || [];
   const cursos = (crmData == null ? void 0 : crmData.cursos) || [];
   // Dinero que ENTRÓ en el mes, en bruto: la misma cifra que "Total cobrado" de Ingresos
@@ -5241,6 +5248,15 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
   const mensualidadDe = (mat, ym) => montoPronosticoMat(crmData, mat, ym);
   const ajusteDe = (ym, folio) => { const v = (ajustesPR || {})[ym + "|" + folio]; return v === undefined || v === null || isNaN(parseFloat(v)) ? null : parseFloat(v); };
   const ingresoProyectado = (ym) => ingresoPorCobrar(ym).esperado;
+  // Dinero que entró en el mes y NO estaba pronosticado: pagos de contratos nuevos del mes
+  // y cobros sin folio (asesorías, clases diagnóstico, ventas, ingresos manuales).
+  const ingresosNuevos = (ym) => {
+    const lista = ingresos.filter((i) => String(i.date || "").startsWith(ym) && (!(i.crmFolio != null && i.crmFolio !== "") || _mesNuevoMap[String(i.crmFolio)] === ym));
+    const deContrato = lista.filter((i) => i.crmFolio != null && i.crmFolio !== "");
+    const sum = (a) => +a.reduce((s2, i) => s2 + (parseFloat(i.monto) || 0), 0).toFixed(2);
+    return { lista, total: sum(lista), contratos: sum(deContrato), nContratos: new Set(deContrato.map((i) => String(i.crmFolio))).size, otros: +(sum(lista) - sum(deContrato)).toFixed(2) };
+  };
+  const balanceMes = (ym) => +(ingresoProyectado(ym) + ingresosNuevos(ym).total - gastosFijosMes(ym)).toFixed(2);
   // Lo que falta por cobrar de ese mes: el proyectado menos lo que ya se adelantó.
   const ingresoPorCobrar = (ym) => {
     const cub = yaCubiertoEnMes(ym);
@@ -5256,7 +5272,9 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
     });
     // Adeudos de meses anteriores: se suman al mes de trabajo (no se repiten en los meses futuros).
     const atraso = ym === monthStr() ? totalAtrasosCRM(crmData, ingresos, ym) : 0;
-    return { pendiente: +(pendiente + atraso).toFixed(2), cubierto: +cubierto.toFixed(2), esperado: +(esperado + atraso).toFixed(2), atraso, folios: cub.folios.size, porFolio: cub.porFolio };
+    // Los adeudos de meses anteriores son INFORMATIVOS (ficha aparte): no se suman a lo
+    // esperado del mes ni al balance.
+    return { pendiente: +pendiente.toFixed(2), cubierto: +cubierto.toFixed(2), esperado: +esperado.toFixed(2), atraso, folios: cub.folios.size, porFolio: cub.porFolio };
   };
   const _fijosOcMes = (ym, excluir) => gastosFijos.filter((g) => g.active && !(excluir && excluir.has(g.id))).reduce((s, g) => {
     const skipped = new Set(g.skippedDates || []);
@@ -5368,7 +5386,7 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
     proyectado: ingresoProyectado(ym),
     real: ingresoReal(ym),
     gastos: gastosFijosMes(ym),
-    balance: ingresoProyectado(ym) - gastosFijosMes(ym),
+    balance: balanceMes(ym),
     isPast: ym < monthStr()
   })), [meses, mats, cursos, ingresos, crmData, gastosFijos, ajustesPR, pagosGastos2, comisionOverrides, retos, empleadosCfg]);
   const activosSel = alumnosActivosEnMes(mesSel, mats, cursos);
@@ -5397,9 +5415,11 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
   if (!crmData) return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl", style: { marginBottom: 14 } }, "\u{1F4C8} Pron\xF3stico de Ingresos"), /* @__PURE__ */ React.createElement("div", { className: "crm-off" }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, "\u{1F50C}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, color: "var(--tx)" } }, "CRM no conectado"), /* @__PURE__ */ React.createElement("div", { style: { color: "var(--tx2)" } }, "El pron\xF3stico requiere los datos del CRM (alumnos, cursos y fechas de inicio/fin)."))));
   return /* @__PURE__ */ React.createElement("div", null, det && (() => { const F = fmt$;
     if (det === "activos") return React.createElement(FichaDetalle, { titulo: "\u{1F4C4} Contratos activos hoy", cols: ["Folio", "Alumno", "Curso"], rows: contratosRegularesCRM(crmData, mesSel).map((m2) => ["#" + m2.folio, m2.alumno || "", m2.curso || ""]), total: null, onClose: () => setDet(null) });
-    if (det === "proy") { const pcD = ingresoPorCobrar(mesSel); const rowsPR = alumnosActivosEnMes(mesSel, mats, cursos).map((m2) => { const base = mensualidadDe(m2, mesSel); const pg = _esCPConta(m2) ? 0 : +((pcD.porFolio || {})[String(m2.folio)] || 0).toFixed(2); const aj = ajusteDe(mesSel, m2.folio); const pend = aj !== null ? aj : Math.max(0, +(base - pg).toFixed(2)); return { folio: m2.folio, alumno: m2.alumno || "", curso: m2.curso || "", nota: _esCPConta(m2) ? cpNotaConta(crmData, m2) : "", mens: base, pag: pg, pend: pend, base: Math.max(0, +(base - pg).toFixed(2)), ajustado: aj !== null }; }).filter((r) => r.pend > 0.004 || r.ajustado); return React.createElement(FichaPorRecibir, { titulo: "\u{1F4B0} Por recibir " + (mesSel === cm ? "este mes" : mesLabel(mesSel)), mesLabelTxt: mesLabel(mesSel), rows: rowsPR, atrasos: mesSel === cm ? atrasosCRM(crmData, ingresos, mesSel) : [], total: F(pcD.pendiente) + (pcD.cubierto > 0 ? " (ya pagado " + F(pcD.cubierto) + " \xB7 total esperado " + F(pcD.esperado) + ")" : ""), onSave: async (folio, val) => { const k = mesSel + "|" + folio; const upd = { ...(ajustesPR || {}) }; if (val === null) delete upd[k]; else upd[k] = val; setAjustesPR(upd); await stor("set", "ajustesPorRecibir", upd); }, onClose: () => setDet(null) }); }
+    if (det === "proy") { const pcD = ingresoPorCobrar(mesSel); const rowsPR = alumnosActivosEnMes(mesSel, mats, cursos).map((m2) => { const base = mensualidadDe(m2, mesSel); const pg = _esCPConta(m2) ? 0 : +((pcD.porFolio || {})[String(m2.folio)] || 0).toFixed(2); const aj = ajusteDe(mesSel, m2.folio); const pend = aj !== null ? aj : Math.max(0, +(base - pg).toFixed(2)); return { folio: m2.folio, alumno: m2.alumno || "", curso: m2.curso || "", nota: _esCPConta(m2) ? cpNotaConta(crmData, m2) : "", mens: base, pag: pg, pend: pend, base: Math.max(0, +(base - pg).toFixed(2)), ajustado: aj !== null }; }).filter((r) => r.pend > 0.004 || r.ajustado); return React.createElement(FichaPorRecibir, { titulo: "\u{1F4B0} Pagos regulares que faltan \u00B7 " + mesLabel(mesSel), mesLabelTxt: mesLabel(mesSel), rows: rowsPR, atrasos: [], total: F(pcD.pendiente) + " por recibir (esperado " + F(pcD.esperado) + " \xB7 ya cobrado " + F(pcD.cubierto) + ")", onSave: async (folio, val) => { const k = mesSel + "|" + folio; const upd = { ...(ajustesPR || {}) }; if (val === null) delete upd[k]; else upd[k] = val; setAjustesPR(upd); await stor("set", "ajustesPorRecibir", upd); }, onClose: () => setDet(null) }); }
+    if (det === "nuevos") { const n2 = ingresosNuevos(mesSel); return React.createElement(FichaDetalle, { titulo: "\u2728 Ingresos nuevos \u00B7 " + mesLabel(mesSel), cols: ["Fecha", "Concepto", "Monto"], rows: n2.lista.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).map((i) => [String(i.date || "").slice(0, 10), (i.crmFolio ? "#" + i.crmFolio + " \u00B7 contrato nuevo \u00B7 " : "") + (i.alumno ? i.alumno + " \u2014 " : "") + (i.desc || i.cat || ""), F(parseFloat(i.monto) || 0)]), total: F(n2.total), onClose: () => setDet(null) }); }
+    if (det === "adeu") { const at = atrasosCRM(crmData, ingresos, mesSel) || []; return React.createElement(FichaDetalle, { titulo: "\u23F3 Adeudos de alumnos (meses anteriores)", cols: ["Folio", "Alumno", "Mes", "Monto"], rows: at.map((a) => ["#" + a.folio, a.alumno || "", mesLabel(a.ym), F(a.monto || 0)]), total: F(at.reduce((s2, a) => s2 + (a.monto || 0), 0)), onClose: () => setDet(null) }); }
     if (det === "real") return React.createElement(FichaDetalle, { titulo: "\u2705 Ya cobrado \u00B7 " + mesLabel(mesSel), cols: ["Fecha", "Concepto", "Cobrado", "Neto"], rows: ingresos.filter((i) => i.date && i.date.startsWith(mesSel)).map((i) => [String(i.date), i.desc || "", F(parseFloat(i.monto) || 0), F(parseFloat(i.neto) || 0)]), total: F(ingresoReal(mesSel)) + " (neto " + F(ingresoRealNeto(mesSel)) + ")", onClose: () => setDet(null) });
-    if (det === "bal") return React.createElement(FichaDetalle, { titulo: "\u{1F4C8} Balance pronosticado \u00B7 " + mesLabel(mesSel), cols: ["Concepto", "Monto"], rows: [["Ingreso esperado (matr\u00EDculas regulares)", F(ingresoProyectado(mesSel))], ...gastosDetalleMes(mesSel).rows.map((r) => [r[0], "-" + F(r[1])])], total: F(ingresoProyectado(mesSel) - gastosFijosMes(mesSel)), onClose: () => setDet(null) });
+    if (det === "bal") return React.createElement(FichaDetalle, { titulo: "\u{1F4C8} Balance pronosticado \u00B7 " + mesLabel(mesSel), cols: ["Concepto", "Monto"], rows: [["Esperado de pagos regulares", F(ingresoProyectado(mesSel))], ["Ingresos nuevos (no pronosticados)", F(ingresosNuevos(mesSel).total)], ...gastosDetalleMes(mesSel).rows.map((r) => [r[0], "-" + F(r[1])])], total: F(balanceMes(mesSel)), onClose: () => setDet(null) });
     if (det === "gatr") return React.createElement(FichaDetalle, { titulo: "\u26A0\uFE0F Gastos atrasados (meses anteriores)", cols: ["Concepto", "Monto"], rows: ((gastosDetalleMes(mesSel).atrasados || {}).rows || []).map((r) => [r[0], F(r[1])]), total: F((gastosDetalleMes(mesSel).atrasados || {}).total || 0), onClose: () => setDet(null) });
     if (det === "gfijos") return React.createElement(FichaDetalle, { titulo: "\u{1F4B8} Gastos del mes \u00B7 " + mesLabel(mesSel), cols: ["Concepto", "Monto"], rows: gastosDetalleMes(mesSel).rows.map((r) => [r[0], F(r[1])]), total: F(gastosFijosMes(mesSel)), onClose: () => setDet(null) });
     return null; })(), /* @__PURE__ */ React.createElement("div", { className: "sec-hdr" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "sec-ttl" }, "\u{1F4C8} Pron\xF3stico de Ingresos"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--tx2)", marginTop: 2 } }, "Proyecci\xF3n basada en alumnos regulares del CRM \xB7 ", mats.length, " matr\xEDculas \xB7 ", cursos.length, " cursos"))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 18 } }, [
@@ -5407,12 +5427,15 @@ function Pronostico({ crmData, ingresos, pagosGastos: pagosGastos2, gastosFijos,
       // Se cuentan FOLIOS, no personas: un alumno inscrito en dos cursos son dos contratos.
       // La pestaña Alumnos CRM agrupa por nombre, por eso daba un número menor.
       sub: (function(){ var s2 = new Set(contratosRegularesCRM(crmData, mesSel).map(function(m2){ return String(m2.alumno || "").trim().toLowerCase(); })); return s2.size + " alumno(s) distintos"; })() },
-    { l: mesSel === cm ? "Por recibir este mes" : "Por recibir \u00B7 " + mesLabel(mesSel), v: fmt$(ingresoPorCobrar(mesSel).pendiente), c: "var(--gr)", mono: true, k: "proy",
-      sub: (function(){ var pc = ingresoPorCobrar(mesSel); return (pc.atraso > 0 ? ("incluye " + fmt$(pc.atraso) + " de meses anteriores \xB7 ") : "") + (pc.cubierto > 0 ? ("ya pagado " + fmt$(pc.cubierto) + " \xB7 total esperado " + fmt$(pc.esperado)) : ""); })() },
+    { l: mesSel === cm ? "Esperado de pagos regulares" : "Pagos regulares \u00B7 " + mesLabel(mesSel), v: fmt$(ingresoPorCobrar(mesSel).esperado), c: "var(--gr)", mono: true, k: "proy",
+      sub: (function(){ var pc = ingresoPorCobrar(mesSel); return "mensualidades de contratos que ya exist\u00EDan \u00B7 ya cobrado " + fmt$(pc.cubierto) + " \u00B7 falta " + fmt$(pc.pendiente); })() },
+    { l: mesSel === cm ? "Ingresos nuevos" : "Ingresos nuevos \u00B7 " + mesLabel(mesSel), v: fmt$(ingresosNuevos(mesSel).total), c: "var(--ac)", mono: true, k: "nuevos",
+      sub: (function(){ var n2 = ingresosNuevos(mesSel); return "no pronosticados \u00B7 " + n2.nContratos + " contrato(s) nuevo(s) " + fmt$(n2.contratos) + " \u00B7 otros " + fmt$(n2.otros) + " (asesor\u00EDas, diagn\u00F3sticos, ventas)"; })() },
     { l: mesSel === cm ? "Ya cobrado este mes" : "Ya cobrado \u00B7 " + mesLabel(mesSel), v: fmt$(ingresoReal(mesSel)), c: "var(--gr)", mono: true, k: "real", sub: "dinero que entr\u00F3 en el mes \u00B7 neto despu\u00E9s de comisi\u00F3n de terminal " + fmt$(ingresoRealNeto(mesSel)) },
     { l: mesSel === cm ? "Gastos del mes" : "Gastos \u00B7 " + mesLabel(mesSel), v: fmt$(gastosFijosMes(mesSel)), c: "var(--rd)", mono: true, k: "gfijos", sub: (function () { const gd = gastosDetalleMes(mesSel); return gd.pagado != null ? "ya pagado " + fmt$(gd.pagado) + " \u00B7 falta " + fmt$(gd.falta) : (gd.estimado ? "estimado \u00B7 " : "") + "gastos fijos, sueldos, horas de instructores, comisiones y bono dominical"; })() },
     ...(gastosDetalleMes(mesSel).atrasados ? [{ l: "Gastos atrasados", v: fmt$(gastosDetalleMes(mesSel).atrasados.total), c: gastosDetalleMes(mesSel).atrasados.total > 0 ? "var(--rd)" : "var(--gr)", mono: true, k: "gatr", sub: "de meses anteriores, sin pagar \u00B7 no se suman a los gastos del mes" }] : []),
-    { l: "Balance pronosticado \u00B7 " + mesLabel(mesSel), v: fmt$(ingresoProyectado(mesSel) - gastosFijosMes(mesSel)), c: ingresoProyectado(mesSel) - gastosFijosMes(mesSel) >= 0 ? "var(--gr)" : "var(--rd)", mono: true, k: "bal", sub: "ingreso esperado " + fmt$(ingresoProyectado(mesSel)) + " \u2212 gastos del mes " + fmt$(gastosFijosMes(mesSel)) }
+    ...(mesSel === cm ? [{ l: "Adeudos de alumnos", v: fmt$(ingresoPorCobrar(mesSel).atraso), c: ingresoPorCobrar(mesSel).atraso > 0 ? "var(--am)" : "var(--gr)", mono: true, k: "adeu", sub: "de meses anteriores, sin cobrar \u00B7 informativo, no se suma al balance" }] : []),
+    { l: "Balance pronosticado \u00B7 " + mesLabel(mesSel), v: fmt$(balanceMes(mesSel)), c: balanceMes(mesSel) >= 0 ? "var(--gr)" : "var(--rd)", mono: true, k: "bal", sub: "regulares " + fmt$(ingresoProyectado(mesSel)) + " + nuevos " + fmt$(ingresosNuevos(mesSel).total) + " \u2212 gastos del mes " + fmt$(gastosFijosMes(mesSel)) }
   ].map(({ l, v, c, mono, k, sub }) => /* @__PURE__ */ React.createElement("div", { key: l, className: "mini-stat", title: "Clic: ver de d\xF3nde sale esta cifra", onClick: () => setDet(k), style: { cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { className: "ms-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "ms-val", style: { color: c, fontSize: mono ? 16 : 22, fontFamily: mono ? "var(--mono)" : "inherit" } }, v), sub && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--tx3)", marginTop: 2 } }, sub)))), /* @__PURE__ */ React.createElement("div", { className: "card", style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("div", { className: "ctitle" }, "\u{1F4CA} Proyecci\xF3n de ingresos m\xEDnimos \u2014 pr\xF3ximos 13 meses"), /* @__PURE__ */ React.createElement("div", { style: { overflowX: "auto", paddingBottom: 4 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 5, alignItems: "flex-end", minWidth: 600, height: 130, padding: "8px 4px 0" } }, timeline.map(({ ym, label, proyectado, real, activos, isPast }) => {
     const pct = maxVal > 0 ? Math.max(proyectado / maxVal, 0.04) : 0.04;
     const realPct = maxVal > 0 ? Math.max(real / maxVal, 0.04) : 0;
@@ -6550,7 +6573,7 @@ function App() {
     { id: "exportar", icon: "\u{1F4E4}", label: "Exportar" }
   ];
   if (!loaded) return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)", fontFamily: "var(--sans)", color: "var(--tx2)" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginBottom: 10, animation: "spin 1s linear infinite" } }, "\u26A1"), /* @__PURE__ */ React.createElement("div", null, "Cargando tu contabilidad...")));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.11.12-1"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", { dangerouslySetInnerHTML: { __html: CSS } }), /* @__PURE__ */ React.createElement("div", { className: "app" }, showRem && upcoming.length > 0 && /* @__PURE__ */ React.createElement(ModalRecordatorios, { pagos: upcoming, onClose: () => setShowRem(false), onMarcarPagado: marcarPagadoDesdeAlerta, onEliminar: eliminarAlertaOcurrencia }), /* @__PURE__ */ React.createElement("div", { className: "hdr" }, /* @__PURE__ */ React.createElement("div", { className: "hdr-logo" }, "\u{1F393}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { className: "hdr-title" }, "Academia de Computaci\xF3n"), /* @__PURE__ */ React.createElement("div", { className: "hdr-sub" }, (/* @__PURE__ */ new Date()).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), React.createElement("span", { title: "Versi\xF3n del archivo \u2014 si no coincide con la \u00FAltima entrega, tu navegador carga una versi\xF3n vieja (Ctrl+Shift+R)", style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: "var(--tx3)", border: "1px solid var(--br)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".4px" } }, "BUILD v2026.11.12-3"))), crmData && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { className: "badge b-crm", style: { fontSize: 10, padding: "3px 8px" } }, crmSource === "firebase" ? "\u2601\uFE0F Firebase \u2014 Tiempo real" : crmSource === "claude" ? "\u{1F535} Claude.ai Storage" : "\u{1F4BE} Local"), /* @__PURE__ */ React.createElement("button", { onClick: refrescarCRM, title: "Actualizar datos del CRM", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx3)", fontSize: 16, padding: "2px 4px", lineHeight: 1 } }, "\u27F3")), /* Selector de mes de trabajo */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 8, background: mesTrabajo !== mesReal() ? "rgba(245,193,71,.12)" : "transparent", border: "1px solid " + (mesTrabajo !== mesReal() ? "var(--am)" : "var(--br)"), borderRadius: 6, padding: "2px 6px" } },
       React.createElement("button", { onClick: () => cambiarMesTrabajo(prevMonth(mesTrabajo)), title: "Mes anterior", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u2039"),
       React.createElement("input", { type: "month", value: mesTrabajo, onChange: (e) => e.target.value && cambiarMesTrabajo(e.target.value), title: "Mes de trabajo \u2014 afecta comisiones, pagos a instructores, dashboard y pendientes", style: { background: "none", border: "none", color: mesTrabajo !== mesReal() ? "var(--am)" : "var(--tx2)", fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", cursor: "pointer", width: 108 } }),
       React.createElement("button", { onClick: () => cambiarMesTrabajo(nextMonth(mesTrabajo)), title: "Mes siguiente", style: { background: "none", border: "none", cursor: "pointer", color: "var(--tx2)", fontSize: 13, padding: "0 3px", lineHeight: 1 } }, "\u203A"),
@@ -6587,7 +6610,7 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return React.createElement("div", { style: { padding: 24, fontFamily: "monospace", fontSize: 13, color: "#fca5a5", background: "#1a0e0e", whiteSpace: "pre-wrap", lineHeight: 1.6, minHeight: "100vh" } },
-        "⚠ Error en la aplicación — BUILD v2026.11.12-1\n\n",
+        "⚠ Error en la aplicación — BUILD v2026.11.12-3\n\n",
         String((this.state.error && this.state.error.message) || this.state.error) + "\n\n",
         (this.state.error && this.state.error.stack) || "",
         "\n\n",
